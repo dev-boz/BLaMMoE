@@ -1,0 +1,29 @@
+# Python environments
+venv/
+.venv/
+.venv-dev/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Data & artifacts (large, regenerable — never commit)
+data/*
+!data/.gitkeep
+results/*
+!results/.gitkeep
+
+# Model weights / caches
+*.safetensors
+*.bin
+*.pt
+*.pth
+.cache/
+hf_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

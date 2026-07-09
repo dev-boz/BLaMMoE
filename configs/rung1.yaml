@@ -1,0 +1,18 @@
+# Rung 1 (Known-Good): same run, different checkpoint. Validates the metric
+# battery. Dimensions match by construction -> orthogonal Procrustes. (spec 1.2)
+rung: 1
+model_a: olmoe-base            # later checkpoint
+model_b: olmoe-base-ckpt-early # earlier checkpoint of the SAME run
+layers: [3, 7, 11]             # depth sweep: early / middle / late (VERIFY count)
+expert_a: null                 # set after expert selection (WP3)
+expert_b: null
+corpus: [wikipedia, code, math]
+max_pairs: 100000
+pooling:
+  method: char_span
+  span_chars: 20
+  boundary_margin: 3
+align:
+  method: orthogonal_procrustes
+  ridge_lambda: 0.0
+seed: 0
