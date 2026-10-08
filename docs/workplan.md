@@ -226,7 +226,12 @@ transmission of ONE expert's output from A into B.
   answer positions) vs its least-routed expert, dense vs routed-only expert
   output, and A's whole residual stream as the CALM/MoT-style baseline.
 - Run: `scripts/toy_train.py configs/toy_poc.yaml model_a|model_b`, then
-  `scripts/toy_poc.py configs/toy_poc.yaml`. Results: `docs/toy-poc-results.md`.
+  `scripts/toy_poc.py configs/toy_poc.yaml`, then `scripts/toy_followup.py`.
+  Results: `docs/toy-poc-results.md`. **Outcome:** routed-only transplant of A's
+  answer-specialist expert into B's last-layer expert, 8% → 96.5%; learned
+  bridge mid-stack 92.0%; all controls at chance. For the real models, use
+  routed-only expert outputs (dense ones leak the residual stream) and a
+  calibration corpus that covers the transmitted content.
 
 ## Dependency graph
 

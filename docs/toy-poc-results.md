@@ -1,10 +1,17 @@
 # Toy POC results — does one MoE expert's output survive transplant into another MoE?
 
-**Short answer: yes, at toy scale.** The *native* output of a single routed
-expert in model A, passed through a linear map fitted on a few thousand clean
-paired positions, lets model B answer questions it has no way to answer on its
-own (8% → 96.5% on answer digits). B differs from A in tokenizer, width,
-expert count and seed. Every control stays at chance.
+**Short answer: yes, at toy scale, two ways.**
+
+- **Zero-shot linear transplant:** the *native* output of a single routed
+  expert in model A, passed through a ridge map fitted on a few thousand clean
+  paired positions, lets model B answer questions it cannot answer on its own
+  (8% → **96.5%** on answer digits).
+- **Learned Tx/Rx bridge:** a gated cross-attention bridge injecting mid-stack
+  reaches **92.0%**.
+
+B differs from A in tokenizer, width, expert count and seed. Every control
+(wrong document, blindfolded A, random vectors, wrong position) stays at
+chance.
 
 This is a proof of *possibility*, not of usefulness: tiny models (2–3.5M
 params), a synthetic task built so the effect is measurable, and an injection
@@ -115,16 +122,43 @@ necessary but not sufficient", seen directly.
 
 ## Learned bridge (Tx → bus → tanh-gated cross-attention Rx)
 
-_Pending: 3000-step runs at B layers 1 and 3 are in progress; 600-step runs are summarised in `poc_results.json`._
+Trained only on B's LM loss on blindfolded text (plus an equal-weight term on
+answer tokens), with both models frozen. The bridge has 37.8k params. Source: A layer 3,
+expert 7 (dense). Bus width 64.
+
+| inject into B after block | steps | matched | other-doc | A blind | random | gate tanh | B ordinary-text loss |
+|---|---|---|---|---|---|---|---|
+| **1 (two blocks above)** | 3000 | **92.0%** | 8.8% | 11.0% | 9.6% | 0.22 | 2.47 (vs 2.40) |
+| 3 (last block) | 3000 | 26.4% | 9.6% | 9.3% | 10.5% | 0.21 | 2.45 |
+| 1 | 600 | 21.4% | 9.8% | 11.0% | 9.8% | 0.09 | 2.44 |
+
+The learned bridge mirrors the linear transplant. It works **mid-stack**, where
+the transplant failed, and is weak at the last layer, where the transplant
+worked. The likely reason: B's remaining blocks need room to read and use what
+the bridge writes. Training loss shows the same kind of sudden jump the base
+models had for recall (≈3.9 → 1.8 between steps 1000 and 2000). At 600 steps
+the bridge had not reached it yet. In the 600-step runs, the routed-only
+specialist (12.5%), unrelated expert (10.2%) and whole residual stream (13.8%)
+were all pre-jump too, so they don't rank those variants. That needs longer runs.
+
+Interference is lower than the transplant's (+0.07 vs +0.27 nats/token on
+ordinary text), as the zero-init tanh gate intends.
+
+**Caveat specific to the bridge:** the Rx cross-attends over *all* of A's earlier
+positions, including where A read the stored values. So it may be doing the
+retrieval itself over A's per-position expert outputs, rather than relaying
+A's own answer. Either way the information comes from A's expert. The blind-A and
+other-doc controls show B cannot get it any other way. But "which computation
+crossed the bridge" is not pinned down.
 
 ## Caveats (read before citing any of this)
 
 - **Toy scale.** 2–3.5M-param models, a synthetic task built for measurability,
   4 layers each. The real question is OLMoE ↔ Qwen-MoE.
-- **Late-layer only.** The transplant that works writes into B's last MoE layer,
+- **Linear transplant is late-layer only.** It writes into B's last MoE layer,
   one step from the logits. It is closer to "A's prediction, re-expressed in
   B's coordinates" than to deep representational sharing. Mid-layer transplants
-  failed.
+  failed. The mid-layer route works only with a learned (nonlinear) bridge.
 - **Single pair, single task, single seed per model.** No error bars.
 - **"Cross-family" is simulated.** Different tokenizer, width, expert granularity
   and seed. Same architecture code, same training data mix.

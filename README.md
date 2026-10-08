@@ -26,6 +26,8 @@ blammoe/            importable package (only tested modules exist — no empty s
   align/            Procrustes / lstsq / ridge fitters (WP4)   [built]
   metrics/          CKA + mutual k-NN + residual battery (WP5) [built]
   data/pooling.py   char-span pooling for tokenizer mismatch   [built]
+  adapters/         Tx/Rx tanh-gated cross-attention (WP6)     [built]
+  toy/              toy MoE pair + transmission POC (WP-T)     [built]
 configs/            one YAML per rung
 docs/               work plan + design docs (agent hand-off)
 papers/             33 source papers as markdown (already fetched)
@@ -57,5 +59,7 @@ uv venv && uv pip install -e ".[dev]"     # pulls CUDA torch, transformers, data
 ## Status
 
 Foundation is in and tested (`pytest` green): config loader, model registry,
-expert-capture hook, alignment fitters (WP4), metric battery + Rung-1 gate (WP5), char-span pooling (WP2). Everything else is specified in the work plan and
+expert-capture hook, alignment fitters (WP4), metric battery + Rung-1 gate (WP5), char-span pooling (WP2), Tx/Rx adapters (WP6), and a toy end-to-end
+proof of concept (WP-T, results in [`docs/toy-poc-results.md`](docs/toy-poc-results.md)).
+Everything else is specified in the work plan and
 intentionally **not** stubbed — pick a work package and build it wired + tested.
