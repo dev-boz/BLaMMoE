@@ -230,3 +230,18 @@ def test_fused_pair_with_rel_pos_is_exact_at_zero_gates_and_trains():
         la, lb = pair(b1.ids, b2.ids, e1, e2)
         (la.logsumexp(-1).mean() + lb.logsumexp(-1).mean()).backward()
         assert all(lk.rx_b.gate.grad is not None for lk in pair.links.values())
+
+
+def test_expert_attention_mass_attributes_attention_to_expert_ids():
+    from blammoe.toy.fused import expert_attention_mass
+
+    ids = torch.tensor([[[0, 1], [2, 1]]])  # 1 doc, 2 writer positions, k=2 -> bus [0,1,2,1]
+    w = torch.zeros(1, 3, 5)
+    w[0, 0, 0] = 1.0  # reader 0 reads only the null slot
+    w[0, 1, 3] = 1.0  # reader 1 reads bus entry 2 -> expert 2
+    w[0, 2, 2], w[0, 2, 4] = 0.5, 0.5  # reader 2 reads expert 1 twice
+    r = expert_attention_mass(w, ids, 3, torch.tensor([[True, True, True]]))
+    assert abs(r["null_share"] - 1 / 3) < 1e-6
+    assert [round(x, 3) for x in r["share"]] == [0.0, 0.5, 0.5]
+    assert [round(x, 3) for x in r["presence"]] == [0.25, 0.5, 0.25]
+    assert [round(x, 3) for x in r["ratio"]] == [0.0, 1.0, 2.0]

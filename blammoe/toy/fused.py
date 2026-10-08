@@ -285,3 +285,25 @@ def diversity(solo: dict, fused: dict, partner_solo: dict, texts: list[str], cha
         "entropy_solo": float(ent(S)),
         "entropy_fused": float(ent(F_)),
     }
+
+
+@torch.no_grad()
+def expert_attention_mass(weights: torch.Tensor, expert_ids: torch.Tensor, n_experts: int,
+                          reader_mask: torch.Tensor) -> dict:
+    """Which partner experts did the reader choose to read?
+
+    weights: [B, T_r, 1 + T_w*k] attention (col 0 = null slot); expert_ids: [B, T_w, k];
+    reader_mask: [B, T_r] bool, the reader positions to aggregate over.
+    Returns the null-slot share, each expert's share of attention mass, each expert's
+    share of the bus entries (presence), and their ratio (>1 = sought out).
+    """
+    w = weights[reader_mask]  # [N, 1 + S]
+    ids = expert_ids.flatten(1)  # [B, S]
+    ids_r = ids[:, None, :].expand(-1, reader_mask.shape[1], -1)[reader_mask]  # [N, S]
+    onehot = torch.nn.functional.one_hot(ids_r, n_experts).float()  # [N, S, E]
+    mass = torch.einsum("ns,nse->e", w[:, 1:], onehot)
+    total = w.sum()
+    presence = torch.nn.functional.one_hot(ids, n_experts).float().mean((0, 1))
+    share = mass / mass.sum().clamp_min(1e-12)
+    return {"null_share": float(w[:, 0].sum() / total), "share": share.tolist(),
+            "presence": presence.tolist(), "ratio": (share / presence.clamp_min(1e-12)).tolist()}
