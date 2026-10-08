@@ -51,7 +51,7 @@ pre-residual (spec 1.1).
   asserts `ExpertCapture.output.shape[-1] == hidden_size`.
 - Papers: OLMoE `2409.02060` (arch).
 
-## WP2 — Paired data collection  ·  Runs on: model  ·  Status: open
+## WP2 — Paired data collection  ·  Runs on: model  ·  Status: partial
 
 Build the paired `(h_A, h_B)` activation corpus (spec 1.3).
 
@@ -69,6 +69,22 @@ Build the paired `(h_A, h_B)` activation corpus (spec 1.3).
 - Acceptance: pooling unit tests (boundary discard, window math); a small
   end-to-end collection run producing a paired file whose two halves have equal row
   counts.
+- **`pooling.py` built** (`tests/test_pooling.py`): `pool_char_spans(offsets_a,
+  states_a, offsets_b, states_b, windows, boundary_margin) -> PooledPairs` and the
+  config-driven `pool_document(..., text_len, cfg.pooling)`. Offsets are HF
+  `offset_mapping` spans; zero-width (special) tokens are ignored. **Margin
+  semantics** (the spec wording is ambiguous): each model mean-pools the tokens
+  lying fully inside the window, and the pair is dropped if either model's pooled
+  tokens leave more than `boundary_margin` chars uncovered at either edge.
+  `boundary_margin=0` keeps only windows on boundaries shared by both tokenizers.
+- **Open for `collect.py`:** a forward hook on a routed expert sees only the
+  tokens routed *to that expert* (HF MoE blocks index-select before calling it),
+  so `ExpertCapture.output` is `[n_routed, d]`, not `[T, d]`. Pooling needs a
+  per-token `[T, d]` array: either recover the routed token indices, or apply the
+  expert FFN densely to the layer's MLP input for every token. Decide and document.
+  Also check the installed `transformers` version still exposes experts as a
+  `ModuleList` — some versions fuse them into one module with 3-D weights, which
+  would break `expert_module_template` (WP1 VERIFY).
 - Depends on: WP1.
 
 ## WP3 — Expert selection  ·  Runs on: model  ·  Status: open
@@ -199,9 +215,9 @@ WP5 (built) ────────────────────┘     
 
 ## Good first tasks (no GPU, runnable on this box now)
 
-1. **WP4 — alignment fitters.** Self-contained NumPy/SciPy; synthetic acceptance.
-2. **WP5 — metric battery.** Same; validates a load-bearing methodological claim.
-3. **WP2 pooling module only** (`data/pooling.py`) — pure index logic, unit-testable
+1. ~~**WP4 — alignment fitters.**~~ *(built)* Self-contained NumPy/SciPy; synthetic acceptance.
+2. ~~**WP5 — metric battery.**~~ *(built)* Same; validates a load-bearing methodological claim.
+3. ~~**WP2 pooling module only**~~ *(built)* (`data/pooling.py`) — pure index logic, unit-testable
    without any model. Leaves `collect.py` for the model box.
 
 These three unblock the math-heavy core of the pipeline and need nothing but the
