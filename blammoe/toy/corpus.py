@@ -116,3 +116,77 @@ class MixedSampler:
         if kind == "recall":
             return recall_sample(self.rng, self.length)
         return self._window(self.prose if kind == "prose" else self.code, kind)
+
+
+# --------------------------------------------------------------------------- split-view recall
+@dataclass(frozen=True)
+class SplitSample:
+    """Same text seen two ways: each stored value is masked in exactly ONE view.
+
+    Answers whose value is masked in a model's own view are unknowable to that
+    model alone — it needs its partner. ``view(which)`` gives a plain Sample for
+    batching; ``partner_answers(which)`` lists the answer chars that model needs
+    help with, ``own_answers(which)`` the ones it can read itself.
+    """
+
+    text: str
+    view_a: str
+    view_b: str
+    a_blind: tuple[int, ...]  # answer chars masked in A's view (A needs B)
+    b_blind: tuple[int, ...]  # answer chars masked in B's view (B needs A)
+    kind: str = "split_recall"
+
+    def view(self, which: str) -> Sample:
+        t = self.view_a if which == "a" else self.view_b
+        return Sample(text=t, blind=t, answer_chars=tuple(sorted(self.a_blind + self.b_blind)), kind=self.kind)
+
+    def partner_answers(self, which: str) -> tuple[int, ...]:
+        return self.a_blind if which == "a" else self.b_blind
+
+    def own_answers(self, which: str) -> tuple[int, ...]:
+        return self.b_blind if which == "a" else self.a_blind
+
+
+def split_recall_doc(rng: random.Random, n_pairs: tuple[int, int] = (4, 6), n_ask: tuple[int, int] = (2, 4)):
+    """-> (clean, view_a, view_b, a_blind answer chars, b_blind answer chars)."""
+    keys: list[str] = []
+    n = rng.randint(*n_pairs)
+    while len(keys) < n:
+        k = "".join(rng.choices(string.ascii_lowercase, k=rng.randint(3, 5)))
+        if k not in keys:
+            keys.append(k)
+    vals = {k: "".join(rng.choices(string.digits, k=4)) for k in keys}
+    hidden_from_a = set(rng.sample(keys, len(keys) // 2))  # the rest are hidden from B
+    clean = va = vb = "store: "
+    for i, k in enumerate(keys):
+        sep = ", " if i < len(keys) - 1 else "; "
+        clean += f"{k}={vals[k]}{sep}"
+        va += f"{k}={MASK * 4 if k in hidden_from_a else vals[k]}{sep}"
+        vb += f"{k}={vals[k] if k in hidden_from_a else MASK * 4}{sep}"
+    clean += "ask: "
+    va += "ask: "
+    vb += "ask: "
+    a_blind: list[int] = []
+    b_blind: list[int] = []
+    asked = rng.sample(keys, min(len(keys), rng.randint(*n_ask)))
+    for i, k in enumerate(asked):
+        start = len(clean) + len(k) + 1
+        (a_blind if k in hidden_from_a else b_blind).extend(range(start, start + 4))
+        piece = f"{k}={vals[k]}" + (", " if i < len(asked) - 1 else "\n")
+        clean, va, vb = clean + piece, va + piece, vb + piece
+    return clean, va, vb, a_blind, b_blind
+
+
+def split_recall_sample(rng: random.Random, length: int) -> SplitSample:
+    """Concatenate split-view docs to exactly ``length`` chars; only complete docs score."""
+    text = va = vb = ""
+    a_blind: list[int] = []
+    b_blind: list[int] = []
+    while len(text) < length:
+        c, x, y, ab, bb = split_recall_doc(rng)
+        if len(text) + len(c) <= length:
+            a_blind.extend(len(text) + i for i in ab)
+            b_blind.extend(len(text) + i for i in bb)
+        text, va, vb = text + c, va + x, vb + y
+    return SplitSample(text=text[:length], view_a=va[:length], view_b=vb[:length],
+                       a_blind=tuple(a_blind), b_blind=tuple(b_blind))

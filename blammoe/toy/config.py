@@ -34,6 +34,20 @@ class BridgeSpec:
 
 
 @dataclass
+class FusedSpec:
+    """Lockstep fusion (WP-T2). ``variants`` maps a name to {pair: ab|bb|aa, links: [...], signal}."""
+
+    steps: int = 1500
+    batch_size: int = 16
+    lr: float = 2e-3
+    answer_weight: float = 1.0
+    d_bus: int = 64
+    n_heads: int = 4
+    p_split: float = 0.5  # share of split-view recall samples (rest: prose/code, both see it)
+    variants: dict = field(default_factory=dict)
+
+
+@dataclass
 class ToyPOCConfig:
     out_dir: str = "results/toy_poc"
     seq_chars: int = 256
@@ -44,6 +58,7 @@ class ToyPOCConfig:
     model_a: ToyModelSpec = field(default_factory=ToyModelSpec)
     model_b: ToyModelSpec = field(default_factory=lambda: ToyModelSpec(tokenizer="bpe", seed=1))
     bridge: BridgeSpec = field(default_factory=BridgeSpec)
+    fused: FusedSpec = field(default_factory=FusedSpec)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ToyPOCConfig":

@@ -111,3 +111,95 @@ def test_train_bridge_moves_gate_and_keeps_models_frozen():
                  steps=5, batch_size=2, lr=1e-2, log=lambda m: None)
     assert bridge.rx.gate.abs().item() > 0
     assert all(torch.equal(before[k], v) for k, v in B.state_dict().items())
+
+
+# --------------------------------------------------------------------------- WP-T2 fused pair
+from blammoe.toy.corpus import split_recall_sample  # noqa: E402
+from blammoe.toy.fused import FusedPair, read_mask, subset_accuracy, token_ends  # noqa: E402
+
+
+def test_split_recall_masks_each_value_in_exactly_one_view():
+    s = split_recall_sample(random.Random(5), 200)
+    assert len(s.text) == len(s.view_a) == len(s.view_b) == 200
+    for i, c in enumerate(s.text):
+        hidden = (s.view_a[i] == MASK) + (s.view_b[i] == MASK)
+        assert hidden == (1 if s.view_a[i] != c or s.view_b[i] != c else 0)
+    assert set(s.a_blind).isdisjoint(s.b_blind) and s.a_blind and s.b_blind
+    assert s.partner_answers("a") == s.a_blind and s.own_answers("a") == s.b_blind
+
+
+def test_read_mask_is_causal_across_tokenizers_with_open_null_slot():
+    reader = torch.tensor([[1, 2, 3]])  # char model: has read 1, 2, 3 chars
+    writer = torch.tensor([[2, 3, 10**9]])  # bpe tokens ending at chars 2, 3, then a pad
+    m = read_mask(reader, writer)
+    assert m.shape == (1, 3, 4) and not m[..., 0].any()
+    assert m[0, 0, 1:].tolist() == [True, True, True]
+    assert m[0, 1, 1:].tolist() == [False, True, True]
+    assert m[0, 2, 1:].tolist() == [False, False, True]  # pad never readable
+
+
+def fused_setup(signal):
+    samples, ta, tb, A, B = setup_pair()
+    sp = [split_recall_sample(random.Random(20 + i), 100) for i in range(2)]
+    b1 = make_batch([s.view("a") for s in sp], ta, 128)
+    b2 = make_batch([s.view("b") for s in sp], tb, 128)
+    return sp, b1, b2, FusedPair(A, B, [0, 1], d_bus=8, n_heads=2, signal=signal)
+
+
+def test_fused_pair_zero_gates_equal_running_models_separately():
+    for signal in ("moe", "experts", "resid"):
+        _, b1, b2, pair = fused_setup(signal)
+        with torch.no_grad():
+            la, lb = pair(b1.ids, b2.ids, token_ends(b1), token_ends(b2))
+            assert torch.allclose(la, pair.A(b1.ids), atol=1e-5)
+            assert torch.allclose(lb, pair.B(b2.ids), atol=1e-5)
+
+
+def test_expert_bus_attention_covers_routed_experts_and_respects_causality():
+    sp, b1, b2, pair = fused_setup("experts")
+    for lk in pair.links.values():
+        with torch.no_grad():
+            lk.rx_a.gate.fill_(1.0)
+            lk.rx_b.gate.fill_(1.0)
+    attn = {}
+    with torch.no_grad():
+        pair(b1.ids, b2.ids, token_ends(b1), token_ends(b2), attn=attn)
+    w = attn[0]["b_reads_a"]  # [B, T_b, 1 + T_a * k_a]
+    k = pair.A.cfg.top_k
+    assert w.shape[-1] == 1 + b1.ids.shape[1] * k
+    assert attn[0]["a_expert_ids"].shape == (*b1.ids.shape, k)
+    ends_b, ends_a = token_ends(b2), token_ends(b1).repeat_interleave(k, 1)
+    future = ends_a[:, None, :] > ends_b[:, :, None]
+    assert torch.all(w[..., 1:][future] == 0)  # nothing read from text B hasn't seen
+    assert torch.allclose(w.sum(-1)[b2.targets != -100], torch.ones(1), atol=1e-5)
+
+
+def test_subset_accuracy_scores_only_requested_answers():
+    sp, b1, b2, pair = fused_setup("moe")
+    with torch.no_grad():
+        logits = pair.A(b1.ids)
+    own = subset_accuracy(logits, b1, [s.own_answers("a") for s in sp])
+    need = subset_accuracy(logits, b1, [s.partner_answers("a") for s in sp])
+    assert own["n"] == sum(len(s.own_answers("a")) for s in sp)
+    assert need["n"] == sum(len(s.partner_answers("a")) for s in sp)
+
+
+def test_first_char_matrix_and_diversity_metrics():
+    from blammoe.toy.fused import diversity, first_char_matrix
+
+    chars = CharTokenizer().itos[1:]
+    tb = bpe()
+    M = first_char_matrix(tb, chars)
+    assert M.shape == (tb.vocab_size, len(chars))
+    assert M[tb.pad_id].sum() == 0 and torch.all(M.sum(1)[torch.arange(tb.vocab_size) != tb.pad_id] <= 1)
+    Mc = first_char_matrix(CharTokenizer(), chars)
+    assert torch.equal(Mc[1:], torch.eye(len(chars)))
+
+    texts = ["ab"]
+    one = lambda c: torch.eye(len(chars))[chars.index(c)]  # noqa: E731
+    # target at chars_read=1 is "b": solo says "x", partner says "y", fused says "b"
+    solo, partner, fused = {(0, 1): one("x")}, {(0, 1): one("y")}, {(0, 1): one("b")}
+    d = diversity(solo, fused, partner, texts, chars)
+    assert d["novel"] == 1.0 and d["novel_and_correct"] == 1.0 and d["emergent_of_both_wrong"] == 1.0
+    d_same = diversity(solo, solo, partner, texts, chars)
+    assert d_same["changed_vs_solo"] == 0.0 and d_same["js_fused_vs_solo"] < 1e-6

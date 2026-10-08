@@ -52,6 +52,11 @@ class MoE(nn.Module):
         self.router = nn.Linear(cfg.d_model, cfg.n_experts, bias=False)
         self.experts = nn.ModuleList(Expert(cfg.d_model, cfg.d_expert) for _ in range(cfg.n_experts))
         self.aux_loss = torch.tensor(0.0)
+        # When ``record`` is set, forward also stores each routed expert's own
+        # output per top-k slot (pre-router-weight): last_idx [*, k], last_slots [*, k, d].
+        self.record = False
+        self.last_idx: torch.Tensor | None = None
+        self.last_slots: torch.Tensor | None = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         shape = x.shape
@@ -59,10 +64,17 @@ class MoE(nn.Module):
         probs = self.router(flat).softmax(dim=-1)  # [N, E]
         weights, idx = probs.topk(self.top_k, dim=-1)  # [N, k]
         out = torch.zeros_like(flat)
+        slots = flat.new_zeros(flat.shape[0], self.top_k, flat.shape[-1]) if self.record else None
         for e, expert in enumerate(self.experts):
             rows, slot = (idx == e).nonzero(as_tuple=True)
             if rows.numel():
-                out.index_add_(0, rows, weights[rows, slot, None] * expert(flat[rows]))
+                y = expert(flat[rows])
+                out.index_add_(0, rows, weights[rows, slot, None] * y)
+                if slots is not None:
+                    slots = slots.index_put((rows, slot), y)
+        if slots is not None:
+            self.last_idx = idx.reshape(*shape[:-1], self.top_k)
+            self.last_slots = slots.reshape(*shape[:-1], self.top_k, shape[-1])
         # Switch-style load balancing: E * sum_e frac_tokens(e) * mean_prob(e)
         frac = F.one_hot(idx, probs.shape[-1]).sum(1).float().mean(0) / self.top_k
         self.aux_loss = probs.shape[-1] * (frac * probs.mean(0)).sum()

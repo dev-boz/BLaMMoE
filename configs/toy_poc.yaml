@@ -35,3 +35,20 @@ bridge:
   batch_size: 16
   lr: 0.002
   answer_weight: 1.0   # extra loss on answer-digit tokens (Test B positions)
+fused:                # WP-T2: both models in lockstep, bidirectional links (scripts/toy_fused.py)
+  steps: 1500
+  batch_size: 16
+  lr: 0.002
+  answer_weight: 1.0
+  d_bus: 64
+  n_heads: 4
+  p_split: 0.5        # split-view recall: each stored value is masked in exactly one model's view
+  variants:
+    ab_all:   {pair: ab, links: [0, 1, 2, 3], signal: moe}   # A<->B after every block
+    ab_early: {pair: ab, links: [0], signal: moe}            # one exchange, after block 0 only
+    bb_all:   {pair: bb, links: [0, 1, 2, 3], signal: moe}   # control: B fused with a copy of itself
+    # translator-routed: each routed expert's own output is a separate, expert-tagged
+    # bus entry and the receiver's cross-attention picks which foreign experts to read
+    ab_experts_all:   {pair: ab, links: [0, 1, 2, 3], signal: experts}
+    ab_experts_early: {pair: ab, links: [0], signal: experts}
+    bb_experts_all:   {pair: bb, links: [0, 1, 2, 3], signal: experts}  # self-fusion control

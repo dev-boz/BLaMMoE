@@ -14,6 +14,7 @@ class Batch:
     targets: torch.Tensor  # [B, T] next-token ids, -100 = ignore
     offsets: list[list[tuple[int, int]]]  # char span of each *input* token
     answer_pos: list[list[int]]  # input positions whose next token is an answer digit
+    full_offsets: list[list[tuple[int, int]]] = None  # input tokens + the final target token
 
 
 def answer_positions(offsets: list[tuple[int, int]], answer_chars) -> list[int]:
@@ -24,12 +25,13 @@ def answer_positions(offsets: list[tuple[int, int]], answer_chars) -> list[int]:
 
 
 def make_batch(samples: list[Sample], tokenizer, max_len: int, blind: bool = False) -> Batch:
-    seqs, offs, answers = [], [], []
+    seqs, offs, fulls, answers = [], [], [], []
     for s in samples:
         ids, off = tokenizer.encode(s.blind if blind else s.text)
         ids, off = ids[: max_len + 1], off[: max_len + 1]
         seqs.append(ids)
         offs.append(off[:-1])
+        fulls.append(off)
         answers.append([p for p in answer_positions(off, s.answer_chars) if p < len(ids) - 1])
     T = max(len(x) for x in seqs) - 1
     inp = torch.full((len(seqs), T), tokenizer.pad_id, dtype=torch.long)
@@ -38,7 +40,7 @@ def make_batch(samples: list[Sample], tokenizer, max_len: int, blind: bool = Fal
         n = len(ids) - 1
         inp[i, :n] = torch.tensor(ids[:-1])
         tgt[i, :n] = torch.tensor(ids[1:])
-    return Batch(ids=inp, targets=tgt, offsets=offs, answer_pos=answers)
+    return Batch(ids=inp, targets=tgt, offsets=offs, answer_pos=answers, full_offsets=fulls)
 
 
 def answer_mask(batch: Batch) -> torch.Tensor:

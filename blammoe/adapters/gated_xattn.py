@@ -44,11 +44,17 @@ class RxAdapter(nn.Module):
         self.gate = nn.Parameter(torch.zeros(1))
 
     def forward(
-        self, x: torch.Tensor, bus: torch.Tensor, block_mask: torch.Tensor | None = None
-    ) -> torch.Tensor:
-        """x: [B, T, d_model]; bus: [B, S, d_bus]; block_mask: [B, T, S] bool, True = may not attend."""
+        self, x: torch.Tensor, bus: torch.Tensor, block_mask: torch.Tensor | None = None,
+        return_weights: bool = False,
+    ):
+        """x: [B, T, d_model]; bus: [B, S, d_bus]; block_mask: [B, T, S] bool, True = may not attend.
+
+        With ``return_weights`` also returns head-averaged attention [B, T, S] — i.e.
+        which bus entries the target chose to read.
+        """
         mask = None
         if block_mask is not None:
             mask = block_mask.repeat_interleave(self.n_heads, dim=0)
-        read, _ = self.attn(self.q(self.norm(x)), bus, bus, attn_mask=mask, need_weights=False)
-        return x + torch.tanh(self.gate) * self.out(read)
+        read, w = self.attn(self.q(self.norm(x)), bus, bus, attn_mask=mask, need_weights=return_weights)
+        y = x + torch.tanh(self.gate) * self.out(read)
+        return (y, w) if return_weights else y
