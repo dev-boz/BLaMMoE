@@ -15,8 +15,12 @@ reward for novelty or correctness alone would credit noise and extra capacity.
 Requiring the wrong-partner run to fail credits only wins that depend on what
 the partner actually said.
 
-The loss is ordinary next-token CE plus ``lam`` x CE on the win tokens (token-
-level rejection-sampling fine-tuning on teacher-forced text).
+The loss is ordinary next-token CE with win tokens weighted ``1 + lam`` (token-
+level rejection-sampling fine-tuning on teacher-forced text). Both terms are
+normalised by the number of valid tokens. An earlier version averaged the win
+term over the wins alone. With wins at ~2% of tokens that gave each win ~100x the
+weight of an ordinary token, and the links learned to push predictions away from
+the solo model everywhere: more novelty, much worse accuracy.
 """
 from __future__ import annotations
 
@@ -36,7 +40,8 @@ def partner_win_mask(
 
 
 def win_weighted_loss(logits: torch.Tensor, targets: torch.Tensor, wins: torch.Tensor, lam: float) -> torch.Tensor:
-    loss = F.cross_entropy(logits.flatten(0, 1), targets.flatten(), ignore_index=-100)
-    if lam and wins.any():
-        loss = loss + lam * F.cross_entropy(logits[wins], targets[wins])
-    return loss
+    """Mean CE over valid tokens, with win tokens counted ``1 + lam`` times."""
+    ce = F.cross_entropy(logits.flatten(0, 1), targets.flatten(), ignore_index=-100, reduction="none")
+    valid = (targets != -100).flatten()
+    w = 1.0 + lam * wins.flatten().float()
+    return (ce * w)[valid].sum() / valid.sum()

@@ -64,4 +64,4 @@ stage2:               # WP-T3: reinforce partner-dependent wins (both arms: same
   steps: 1000
   batch_size: 16
   lr: 0.0002          # with 100-step warmup + cosine decay
-  lam: 2.0            # reward arm: extra CE weight on tokens the fusion gets right only thanks to the partner
+  lam: 2.0            # reward arm: partner-dependent win tokens count 1 + lam = 3x in the CE mean

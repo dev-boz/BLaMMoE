@@ -24,5 +24,5 @@ def test_win_weighted_loss_adds_only_on_wins():
     some = torch.tensor([[True, False]])
     base = win_weighted_loss(logits, targets, none, lam=2.0)
     boosted = win_weighted_loss(logits, targets, some, lam=2.0)
-    assert torch.isclose(boosted, base * 3)  # uniform logits: win CE == mean CE
+    assert torch.isclose(boosted, base * 2)  # 2 tokens, one counted 3x: (3 + 1) / 2 per-token CE
     assert torch.isclose(win_weighted_loss(logits, targets, some, lam=0.0), base)
