@@ -85,7 +85,7 @@ primary criterion is operation-level specialization.
   OLMoE `2409.02060` (domain routing stats).
 - Depends on: WP1.
 
-## WP4 — Alignment fitters  ·  Runs on: any  ·  Status: open
+## WP4 — Alignment fitters  ·  Runs on: any  ·  Status: built
 
 Supervised maps from `H_A` to `H_B` (spec 1.4). Pure NumPy/SciPy.
 
@@ -94,6 +94,14 @@ Supervised maps from `H_A` to `H_B` (spec 1.4). Pure NumPy/SciPy.
 - `blammoe/align/linear.py` — `fit_linear(H_A, H_B, ridge=0.0) -> W` least-squares,
   rectangular (Rung 3), with unconstrained and ridge variants.
 - Common `apply(map, H)` and a `residual(map, H_A, H_B)` helper.
+- **Built** (`tests/test_align.py`). Fitters return a `LinearMap` (W + centering
+  means) from `blammoe/align/base.py`; `residual` is relative (= 1 − R²), so 1.0 is
+  exactly the predict-the-target-mean / Transmission-Illusion baseline — always
+  evaluate it on held-out pairs. `fit_from_config(cfg.align, H_A, H_B)` dispatches
+  on the rung YAML. Extras beyond the contract: `fit_orthogonal(..., scale=True)`
+  (similarity Procrustes, absorbs a global norm gap between checkpoints), and
+  `fit_orthogonal` also accepts `d_A≠d_B` (semi-orthogonal; the Atlas-Alignment
+  setup) as a Rung-3 baseline next to lstsq/ridge.
 - Acceptance: recover a known random orthogonal `R` on synthetic data to ~machine
   precision; ridge shrinks toward zero as λ→∞; rectangular map handles `d_A≠d_B`.
 - Papers: Atlas-Alignment `2510.27413`, "Transferring Features…" `2506.06609`,
@@ -174,7 +182,7 @@ selection → collection → fit → metric battery → efficacy tests, logging 
 WP0 ─ built
 WP1 ─(hooks built; loader open)─┬─ WP2 ── WP3
                                 │          │
-WP4 (any) ──────────────────────┼──────────┤
+WP4 (built) ────────────────────┼──────────┤
 WP5 (any) ──────────────────────┘          │
                                  WP6 ──┬── WP7
                                        ├── WP8 ──┬── WP9
