@@ -140,7 +140,20 @@ solo top-1s, 4–7% of positions) occur at the *same rate* with a wrong partner.
 That is bridge noise, not new thinking. The translator-routed fusion is the only
 variant where the change is partner-specific.
 
-**Capacity control (pending):** A fused with a copy of itself (same bridges, same training) is running, to separate "B brought something new" from "a second copy of A adds compute".
+**Capacity control: A fused with a copy of itself** (same translator-routed
+links, character bias, 3000 steps). It solves split-view recall (96.5% / 98.6%:
+trivial when both sides are the same model) but does **not** help on ordinary
+text. A's bits/char go from 1.677 to 1.702, and to 1.701 with a wrong-document
+partner, so there is no partner-specific effect. A second copy of A adds compute
+and bridge parameters but no new information. The A+B gain (1.651; wrong
+partner 1.768) appears only when the partner is a *different* model. That is
+the closest this toy gets to the hoped-for "new dynamic": B's different view of
+the same text makes A predict better than either model alone.
+
+| A's bits/char on ordinary text | fused | wrong partner | solo |
+|---|---|---|---|
+| **A + B** (translator-routed, char bias) | **1.651** | 1.768 | 1.677 |
+| A + copy of A (same setup) | 1.702 | 1.701 | 1.677 |
 
 ## Caveats
 
