@@ -52,3 +52,7 @@ fused:                # WP-T2: both models in lockstep, bidirectional links (scr
     ab_experts_all:   {pair: ab, links: [0, 1, 2, 3], signal: experts}
     ab_experts_early: {pair: ab, links: [0], signal: experts}
     bb_experts_all:   {pair: bb, links: [0, 1, 2, 3], signal: experts}  # self-fusion control
+    # + char-distance relative attention bias (the coordinate both tokenizers share), 2x steps
+    ab_all_rel:         {pair: ab, links: [0, 1, 2, 3], signal: moe, rel_pos: true, steps: 3000}
+    ab_early_rel:       {pair: ab, links: [0], signal: moe, rel_pos: true, steps: 3000}
+    ab_experts_all_rel: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, steps: 3000}

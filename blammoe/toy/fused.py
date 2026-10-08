@@ -48,6 +48,21 @@ def read_mask(reader_ends: torch.Tensor, writer_ends: torch.Tensor) -> torch.Ten
     return torch.cat([null, blocked], dim=-1)
 
 
+REL_BUCKETS = 12  # 0: future (masked) | 1-5: distance 0-4 | 6..10: 5-7, 8-15, 16-31, 32-63, 64+ | 11: null
+
+
+def char_distance_buckets(reader_ends: torch.Tensor, writer_ends: torch.Tensor) -> torch.Tensor:
+    """[B, T_r, 1 + T_w] bucket of (chars read by reader - chars read by writer); col 0 = null slot."""
+    d = reader_ends[:, :, None] - writer_ends[:, None, :]
+    b = torch.zeros_like(d)
+    b = torch.where((d >= 0) & (d <= 4), d + 1, b)
+    for i, (lo, hi) in enumerate(((5, 7), (8, 15), (16, 31), (32, 63))):
+        b = torch.where((d >= lo) & (d <= hi), torch.full_like(d, 6 + i), b)
+    b = torch.where(d >= 64, torch.full_like(d, 10), b)
+    null = torch.full_like(b[..., :1], REL_BUCKETS - 1)
+    return torch.cat([null, b], dim=-1)
+
+
 def _causal(T: int, device) -> torch.Tensor:
     return torch.triu(torch.full((T, T), float("-inf"), device=device), diagonal=1)
 
@@ -61,10 +76,12 @@ class Link(nn.Module):
     then chooses which foreign experts to read — the translator does the routing.
     """
 
-    def __init__(self, d_a: int, d_b: int, d_bus: int, n_heads: int, n_exp_a: int = 0, n_exp_b: int = 0):
+    def __init__(self, d_a: int, d_b: int, d_bus: int, n_heads: int, n_exp_a: int = 0, n_exp_b: int = 0,
+                 n_rel_buckets: int = 0):
         super().__init__()
         self.tx_a, self.tx_b = TxAdapter(d_a, d_bus), TxAdapter(d_b, d_bus)
-        self.rx_a, self.rx_b = RxAdapter(d_a, d_bus, n_heads), RxAdapter(d_b, d_bus, n_heads)
+        self.rx_a = RxAdapter(d_a, d_bus, n_heads, n_rel_buckets)
+        self.rx_b = RxAdapter(d_b, d_bus, n_heads, n_rel_buckets)
         self.eid_a = nn.Embedding(n_exp_a, d_bus) if n_exp_a else None  # tags A's experts
         self.eid_b = nn.Embedding(n_exp_b, d_bus) if n_exp_b else None
 
@@ -75,9 +92,10 @@ class Link(nn.Module):
             z = (z + eid(idx)).flatten(1, 2)  # position-major: (t0,slot0), (t0,slot1), ...
         return torch.cat([torch.zeros_like(z[:, :1]), z], dim=1)  # prepend null slot
 
-    def forward(self, xa, xb, sa, sb, mask_a, mask_b, ia=None, ib=None, want_weights=False):
-        ra = self.rx_a(xa, self._bus(self.tx_b, sb, self.eid_b, ib), mask_a, return_weights=want_weights)
-        rb = self.rx_b(xb, self._bus(self.tx_a, sa, self.eid_a, ia), mask_b, return_weights=want_weights)
+    def forward(self, xa, xb, sa, sb, mask_a, mask_b, ia=None, ib=None, want_weights=False,
+                rel_a=None, rel_b=None):
+        ra = self.rx_a(xa, self._bus(self.tx_b, sb, self.eid_b, ib), mask_a, want_weights, rel_a)
+        rb = self.rx_b(xb, self._bus(self.tx_a, sa, self.eid_a, ia), mask_b, want_weights, rel_b)
         return ra, rb
 
 
@@ -90,18 +108,19 @@ class FusedPair(nn.Module):
     expert-tagged bus entry (receiver decides which to read); "resid" = residual."""
 
     def __init__(self, A: ToyMoELM, B: ToyMoELM, links: list[int], d_bus: int = 64, n_heads: int = 4,
-                 signal: str = "moe"):
+                 signal: str = "moe", rel_pos: bool = False):
         super().__init__()
         if A.cfg.n_layers != B.cfg.n_layers:
             raise ValueError("lockstep fusion needs equal depth")
         if signal not in SIGNALS:
             raise ValueError(signal)
-        self.A, self.B, self.signal = A, B, signal
+        self.A, self.B, self.signal, self.rel_pos = A, B, signal, rel_pos
         for p in list(A.parameters()) + list(B.parameters()):
             p.requires_grad_(False)
         ea, eb = (A.cfg.n_experts, B.cfg.n_experts) if signal == "experts" else (0, 0)
         self.links = nn.ModuleDict(
-            {str(l): Link(A.cfg.d_model, B.cfg.d_model, d_bus, n_heads, ea, eb) for l in links}
+            {str(l): Link(A.cfg.d_model, B.cfg.d_model, d_bus, n_heads, ea, eb, REL_BUCKETS if rel_pos else 0)
+             for l in links}
         )
 
     def bridge_parameters(self):
@@ -124,6 +143,9 @@ class FusedPair(nn.Module):
         if experts:
             wa, wb = wa.repeat_interleave(A.cfg.top_k, 1), wb.repeat_interleave(B.cfg.top_k, 1)
         mask_a, mask_b = read_mask(ends_a, wb), read_mask(ends_b, wa)
+        rel_a = rel_b = None
+        if self.rel_pos:
+            rel_a, rel_b = char_distance_buckets(ends_a, wb), char_distance_buckets(ends_b, wa)
         for l, (blk_a, blk_b) in enumerate(zip(A.layers, B.layers)):
             active = str(l) in self.links and l not in disabled
             cap: dict[str, torch.Tensor] = {}
@@ -148,7 +170,7 @@ class FusedPair(nn.Module):
                 sa, sb = xa, xb
             ra, rb = self.links[str(l)](
                 xa, xb, sa.roll(partner_roll, 0), sb.roll(partner_roll, 0), mask_a, mask_b, ia, ib,
-                want_weights=attn is not None,
+                want_weights=attn is not None, rel_a=rel_a, rel_b=rel_b,
             )
             if attn is not None:
                 (xa, w_ab), (xb, w_ba) = ra, rb

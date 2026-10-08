@@ -203,3 +203,30 @@ def test_first_char_matrix_and_diversity_metrics():
     assert d["novel"] == 1.0 and d["novel_and_correct"] == 1.0 and d["emergent_of_both_wrong"] == 1.0
     d_same = diversity(solo, solo, partner, texts, chars)
     assert d_same["changed_vs_solo"] == 0.0 and d_same["js_fused_vs_solo"] < 1e-6
+
+
+def test_char_distance_buckets():
+    from blammoe.toy.fused import REL_BUCKETS, char_distance_buckets
+
+    reader = torch.tensor([[10, 100]])
+    writer = torch.tensor([[10, 9, 3, 20, 40]])
+    b = char_distance_buckets(reader, writer)
+    assert b.shape == (1, 2, 6) and torch.all(b[..., 0] == REL_BUCKETS - 1)
+    assert b[0, 0, 1:].tolist() == [1, 2, 6, 0, 0]  # d = 0, 1, 7 (5-7 bucket), future, future
+    assert b[0, 1, 1:].tolist() == [10, 10, 10, 10, 9]  # d = 90, 91, 97, 80 -> 64+; 60 -> 32-63
+
+
+def test_fused_pair_with_rel_pos_is_exact_at_zero_gates_and_trains():
+    samples, ta, tb, A, B = setup_pair()
+    sp = [split_recall_sample(random.Random(30 + i), 100) for i in range(2)]
+    b1 = make_batch([s.view("a") for s in sp], ta, 128)
+    b2 = make_batch([s.view("b") for s in sp], tb, 128)
+    for signal in ("moe", "experts"):
+        pair = FusedPair(A, B, [0, 1], d_bus=8, n_heads=2, signal=signal, rel_pos=True)
+        e1, e2 = token_ends(b1), token_ends(b2)
+        with torch.no_grad():
+            la, lb = pair(b1.ids, b2.ids, e1, e2)
+            assert torch.allclose(la, A(b1.ids), atol=1e-5) and torch.allclose(lb, B(b2.ids), atol=1e-5)
+        la, lb = pair(b1.ids, b2.ids, e1, e2)
+        (la.logsumexp(-1).mean() + lb.logsumexp(-1).mean()).backward()
+        assert all(lk.rx_b.gate.grad is not None for lk in pair.links.values())

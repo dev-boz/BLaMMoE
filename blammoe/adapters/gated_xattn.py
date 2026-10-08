@@ -32,9 +32,16 @@ class TxAdapter(nn.Module):
 
 
 class RxAdapter(nn.Module):
-    """Bus -> target residual stream via tanh-gated cross-attention (gate init 0)."""
+    """Bus -> target residual stream via tanh-gated cross-attention (gate init 0).
 
-    def __init__(self, d_model: int, d_bus: int, n_heads: int = 4):
+    ``n_rel_buckets > 0`` adds a learned per-head attention bias indexed by a
+    caller-supplied bucket for each (target, bus entry) pair — e.g. bucketed
+    *character* distance, the one coordinate two models with different
+    tokenizers and position embeddings share. Zero-initialised, so it changes
+    nothing until trained.
+    """
+
+    def __init__(self, d_model: int, d_bus: int, n_heads: int = 4, n_rel_buckets: int = 0):
         super().__init__()
         self.n_heads = n_heads
         self.norm = nn.LayerNorm(d_model)
@@ -42,19 +49,28 @@ class RxAdapter(nn.Module):
         self.attn = nn.MultiheadAttention(d_bus, n_heads, batch_first=True)
         self.out = nn.Linear(d_bus, d_model)
         self.gate = nn.Parameter(torch.zeros(1))
+        self.rel = None
+        if n_rel_buckets:
+            self.rel = nn.Embedding(n_rel_buckets, n_heads)
+            nn.init.zeros_(self.rel.weight)
 
     def forward(
         self, x: torch.Tensor, bus: torch.Tensor, block_mask: torch.Tensor | None = None,
-        return_weights: bool = False,
+        return_weights: bool = False, rel_buckets: torch.Tensor | None = None,
     ):
-        """x: [B, T, d_model]; bus: [B, S, d_bus]; block_mask: [B, T, S] bool, True = may not attend.
+        """x: [B, T, d_model]; bus: [B, S, d_bus]; block_mask: [B, T, S] bool, True = may not attend;
+        rel_buckets: [B, T, S] long (only used if the adapter has ``n_rel_buckets``).
 
         With ``return_weights`` also returns head-averaged attention [B, T, S] — i.e.
         which bus entries the target chose to read.
         """
         mask = None
         if block_mask is not None:
-            mask = block_mask.repeat_interleave(self.n_heads, dim=0)
+            mask = block_mask.repeat_interleave(self.n_heads, dim=0)  # [B*H, T, S], batch-major
+        if self.rel is not None and rel_buckets is not None:
+            B, T, S = rel_buckets.shape
+            bias = self.rel(rel_buckets).permute(0, 3, 1, 2).reshape(B * self.n_heads, T, S)
+            mask = bias if mask is None else bias.masked_fill(mask, float("-inf"))
         read, w = self.attn(self.q(self.norm(x)), bus, bus, attn_mask=mask, need_weights=return_weights)
         y = x + torch.tanh(self.gate) * self.out(read)
         return (y, w) if return_weights else y

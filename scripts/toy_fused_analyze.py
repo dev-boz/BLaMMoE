@@ -34,7 +34,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
     (m1, t1), (m2, t2) = models[v["pair"][0]], models[v["pair"][1]]
     if m2 is m1:
         m2 = copy.deepcopy(m1)
-    pair = FusedPair(m1, m2, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"))
+    pair = FusedPair(m1, m2, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"), v.get("rel_pos", False))
     pair.links.load_state_dict(torch.load(out / f"fused_{variant}.pt"))
     pair.eval()
 

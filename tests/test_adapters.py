@@ -50,3 +50,25 @@ def test_block_mask_hides_source_positions():
     src3 = src.clone()
     src3[:, 0] += 10.0 * torch.randn(8)  # perturb a visible position
     assert not torch.allclose(rx(x, tx(src3), mask), base, atol=1e-3)
+
+
+def test_relative_bias_is_noop_at_init_and_learns_through_float_mask():
+    torch.manual_seed(3)
+    tx, rx = TxAdapter(8, 8), RxAdapter(8, 8, n_heads=2, n_rel_buckets=3)
+    with torch.no_grad():
+        rx.gate.fill_(1.0)
+    src, x = torch.randn(2, 5, 8), torch.randn(2, 4, 8)
+    buckets = torch.randint(0, 3, (2, 4, 5))
+    mask = torch.zeros(2, 4, 5, dtype=torch.bool)
+    mask[:, :, 4] = True
+    assert torch.allclose(rx(x, tx(src), mask, rel_buckets=buckets), rx(x, tx(src), mask), atol=1e-6)
+    rx(x, tx(src), mask, rel_buckets=buckets).pow(2).sum().backward()
+    assert rx.rel.weight.grad is not None and rx.rel.weight.grad.abs().sum() > 0
+    with torch.no_grad():  # a large bias on one bucket steers attention there; masked entries stay masked
+        rx.rel.weight.zero_()
+        rx.rel.weight[2] = 50.0
+    _, w = rx(x, tx(src), mask, return_weights=True, rel_buckets=buckets)
+    assert torch.all(w[..., 4] == 0)
+    picked = (buckets[..., :4] == 2).float()
+    has = picked.sum(-1) > 0
+    assert torch.allclose((w[..., :4] * picked).sum(-1)[has], torch.ones(1), atol=1e-3)

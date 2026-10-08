@@ -36,7 +36,7 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
     m2, t2 = models[v["pair"][1]]
     if m2 is m1:
         m2 = copy.deepcopy(m1)  # self-fusion control: two copies of the same model
-    pair = FusedPair(m1, m2, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"))
+    pair = FusedPair(m1, m2, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"), v.get("rel_pos", False))
     t0 = time.time()
     logf = open(out / f"fused_{variant}.log", "w")
 
@@ -70,14 +70,15 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
     n_params = sum(p.numel() for p in pair.bridge_parameters())
     log(f"variant {variant} {v}: {n_params:,} bridge params")
     history = []
-    for step in range(fs.steps):
+    steps = v.get("steps", fs.steps)
+    for step in range(steps):
         b1, b2, e1, e2 = encode(draw(fs.batch_size))
         l1, l2 = pair(b1.ids, b2.ids, e1, e2)
         loss = pair_loss(l1, b1, fs.answer_weight) + pair_loss(l2, b2, fs.answer_weight)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
-        if step % 100 == 0 or step == fs.steps - 1:
+        if step % 100 == 0 or step == steps - 1:
             gates = {k: [round(float(torch.tanh(lk.rx_a.gate.detach())), 3),
                          round(float(torch.tanh(lk.rx_b.gate.detach())), 3)] for k, lk in pair.links.items()}
             rec = {"step": step, "loss": round(float(loss.detach()), 4), "gates": gates}
