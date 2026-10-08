@@ -57,3 +57,11 @@ fused:                # WP-T2: both models in lockstep, bidirectional links (scr
     ab_early_rel:       {pair: ab, links: [0], signal: moe, rel_pos: true, steps: 3000}
     ab_experts_all_rel: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, steps: 3000}
     aa_experts_all_rel: {pair: aa, links: [0, 1, 2, 3], signal: experts, rel_pos: true, steps: 3000}  # capacity control
+    # WP-T3 stage 2: continue ab_experts_all_rel's links on ordinary text only (scripts/toy_fused_reward.py)
+    ab_experts_all_rel_plain:  {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, init_from: ab_experts_all_rel, stage2: plain}
+    ab_experts_all_rel_reward: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, init_from: ab_experts_all_rel, stage2: reward}
+stage2:               # WP-T3: reinforce partner-dependent wins (both arms: same data/steps/lr)
+  steps: 1000
+  batch_size: 16
+  lr: 0.0002          # with 100-step warmup + cosine decay
+  lam: 2.0            # reward arm: extra CE weight on tokens the fusion gets right only thanks to the partner

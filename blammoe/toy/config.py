@@ -48,6 +48,16 @@ class FusedSpec:
 
 
 @dataclass
+class Stage2Spec:
+    """WP-T3 translator fine-tuning on ordinary text (scripts/toy_fused_reward.py)."""
+
+    steps: int = 1000
+    batch_size: int = 16
+    lr: float = 2e-4
+    lam: float = 2.0  # extra CE weight on partner-dependent win tokens (reward arm only)
+
+
+@dataclass
 class ToyPOCConfig:
     out_dir: str = "results/toy_poc"
     seq_chars: int = 256
@@ -59,6 +69,7 @@ class ToyPOCConfig:
     model_b: ToyModelSpec = field(default_factory=lambda: ToyModelSpec(tokenizer="bpe", seed=1))
     bridge: BridgeSpec = field(default_factory=BridgeSpec)
     fused: FusedSpec = field(default_factory=FusedSpec)
+    stage2: Stage2Spec = field(default_factory=Stage2Spec)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ToyPOCConfig":
