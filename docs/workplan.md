@@ -145,7 +145,7 @@ Trust the metrics before trusting them on the real pair (spec 1.3, item 5).
   Rung-1 data.
 - Papers: CKA reliability `2210.16156`, Relative Representations `2209.15430`.
 
-## WP6 — Injection adapter (Tx/Rx + Latent Bus)  ·  Runs on: model  ·  Status: open
+## WP6 — Injection adapter (Tx/Rx + Latent Bus)  ·  Runs on: model  ·  Status: partial
 
 Let the target model *read* the foreign vector (spec 1.1). Hub-and-spoke: one
 Tx/Rx pair per model into a Universal Latent Bus.
@@ -157,6 +157,12 @@ Tx/Rx pair per model into a Universal Latent Bus.
   states is `model`.
 - Acceptance: at zero-init gate the injected contribution is exactly zero (identity
   behavior); shapes compose through Tx→bus→Rx; gate is a learnable scalar/vector.
+- **`blammoe/adapters/gated_xattn.py` built** (`tests/test_adapters.py`): `TxAdapter`
+  (LayerNorm + linear into the bus) and `RxAdapter` (target residual cross-attends
+  over the bus, added through `tanh(gate)`, gate = 0 at init → bit-for-bit
+  identity). Takes a `[B, T_tgt, T_src]` block mask, which is how the toy POC
+  enforces causality across mismatched tokenizers. Trained end-to-end in WP-T;
+  training against real checkpoints is still open.
 - Papers: CALM `2401.02412`, Flamingo `2204.14198`, MoT `2509.21164`, BRIDGE
   `2511.11526`, Zipper `2405.18669`; Symphony-MoE `2509.18542` (interference risk).
 - Depends on: WP1, WP4.
@@ -198,6 +204,29 @@ selection → collection → fit → metric battery → efficacy tests, logging 
 `results/`. Depends on: WP2–WP10.
 
 ---
+
+## WP-T — Toy proof of concept  ·  Runs on: any  ·  Status: built
+
+The whole Phase-1 question at toy scale, runnable on this CPU box with no
+downloads: two tiny MoE LMs trained from scratch (`blammoe/toy/`), then
+transmission of ONE expert's output from A into B.
+
+- A: char-level, d=128, 8 experts. B: BPE-1024, d=96, 16 finer experts,
+  different seed. (Stands in for Rung 3: tokenizer, width, expert granularity.)
+- Corpus: CPython stdlib (code), `papers/` (prose), synthetic key→value recall.
+- **Blindfold test** (a controlled Test B): B reads the recall prompt with stored
+  values masked, so it cannot know the answer digits (chance 10%); A reads it
+  clean. Any accuracy gain in B must arrive through the translator.
+- Carriers: (1) zero-shot linear transplant — WP4 ridge map A-expert → B-expert
+  fitted on clean pairs, swapped into B's MoE; (2) learned bridge — WP6 Tx/Rx
+  trained on B's LM loss, both models frozen.
+- Controls: shuffled-document A signal, blindfolded A, matched-norm random,
+  wrong-position (Test C, transplant only), plus damage to B's ordinary-text loss.
+- Variants: A's operation-level "answer specialist" expert (most routed at
+  answer positions) vs its least-routed expert, dense vs routed-only expert
+  output, and A's whole residual stream as the CALM/MoT-style baseline.
+- Run: `scripts/toy_train.py configs/toy_poc.yaml model_a|model_b`, then
+  `scripts/toy_poc.py configs/toy_poc.yaml`. Results: `docs/toy-poc-results.md`.
 
 ## Dependency graph
 

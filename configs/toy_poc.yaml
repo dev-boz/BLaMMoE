@@ -1,0 +1,37 @@
+# Toy proof-of-concept (WP-T): two tiny MoE LMs trained from scratch, then an
+# expert-level translator between them. Differences between A and B stand in
+# for Rung 3 "cross-family": tokenizer, width, expert count/granularity, seed.
+out_dir: results/toy_poc
+seq_chars: 256        # every sample is a 256-char window of text
+p_recall: 0.5         # share of synthetic key->value recall docs (rest: prose/code)
+steps: 4000
+batch_size: 32
+lr: 0.003
+model_a:              # "informed" model: char-level, wide, coarse experts
+  tokenizer: char
+  d_model: 128
+  n_layers: 4
+  n_heads: 4
+  n_experts: 8
+  top_k: 2
+  d_expert: 256
+  seed: 0
+model_b:              # "receiving" model: BPE, narrower, fine-grained experts
+  tokenizer: bpe
+  bpe_vocab: 1024
+  d_model: 96
+  n_layers: 4
+  n_heads: 4
+  n_experts: 16
+  top_k: 2
+  d_expert: 96
+  seed: 1
+bridge:
+  layer_a: 3          # transmit an expert from A's last layer
+  layer_b: 1          # inject into B after block 1 (2 blocks above it)
+  d_bus: 64
+  n_heads: 4
+  steps: 600
+  batch_size: 16
+  lr: 0.002
+  answer_weight: 1.0   # extra loss on answer-digit tokens (Test B positions)
