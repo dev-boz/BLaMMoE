@@ -108,7 +108,7 @@ Supervised maps from `H_A` to `H_B` (spec 1.4). Pure NumPy/SciPy.
   Søgaard `1805.03620` (why supervised over unsupervised here), Platonic-brain
   `2605.20496` (orthogonal works — do **not** default to ridge without evidence).
 
-## WP5 — Metric battery + validate-the-validators  ·  Runs on: any  ·  Status: open
+## WP5 — Metric battery + validate-the-validators  ·  Runs on: any  ·  Status: built
 
 Trust the metrics before trusting them on the real pair (spec 1.3, item 5).
 
@@ -120,6 +120,13 @@ Trust the metrics before trusting them on the real pair (spec 1.3, item 5).
 - Acceptance: on synthetic data, known-good (identity + noise) scores high on all
   three metrics; known-bad (independent random) scores low; CKA-vs-battery
   divergence is demonstrated on an outlier-injected case.
+- **Built** (`tests/test_metrics.py`). `run_battery(H_A, H_B) -> BatteryResult`
+  (linear CKA, mutual k-NN à la Huh et al. 2405.07987, held-out similarity-Procrustes
+  residual on row-L2-normalized states à la Atlas-Alignment); `rung1_gate(good, bad)`
+  passes only if *every* metric separates the pair. Outlier case reproduces Davari
+  Cor. 3: one point moved by 1000 drops CKA 0.9999 → 0.09 while k-NN and residual
+  are unchanged. Gate gaps (0.1 each) are a judgment call — recalibrate on real
+  Rung-1 data.
 - Papers: CKA reliability `2210.16156`, Relative Representations `2209.15430`.
 
 ## WP6 — Injection adapter (Tx/Rx + Latent Bus)  ·  Runs on: model  ·  Status: open
@@ -183,7 +190,7 @@ WP0 ─ built
 WP1 ─(hooks built; loader open)─┬─ WP2 ── WP3
                                 │          │
 WP4 (built) ────────────────────┼──────────┤
-WP5 (any) ──────────────────────┘          │
+WP5 (built) ────────────────────┘          │
                                  WP6 ──┬── WP7
                                        ├── WP8 ──┬── WP9
                                        │         └── WP10
