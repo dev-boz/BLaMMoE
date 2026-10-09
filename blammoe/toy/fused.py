@@ -140,6 +140,7 @@ class FusedPair(nn.Module):
         self, ids_a: torch.Tensor, ids_b: torch.Tensor, ends_a: torch.Tensor, ends_b: torch.Tensor,
         *, disabled: frozenset[int] = frozenset(), partner_roll: int = 0, attn: dict | None = None,
         write_ends_a: torch.Tensor | None = None, write_ends_b: torch.Tensor | None = None,
+        hide_experts: tuple[frozenset[int], frozenset[int]] = (frozenset(), frozenset()),
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """``disabled``: link depths switched off. ``partner_roll``: each model hears the
         partner of a *different* document in the batch (shuffled-partner control).
@@ -147,7 +148,9 @@ class FusedPair(nn.Module):
         [B, T_reader, 1 + S] (column 0 = null slot) plus the expert ids on the bus.
         ``write_ends_*``: when each position may be READ by the partner (default: its own
         ends). Pass ``closed_token_ends`` to stop a partner reading a BPE token before its
-        boundaries are final - otherwise those boundaries leak upcoming chars."""
+        boundaries are final - otherwise those boundaries leak upcoming chars.
+        ``hide_experts``: (A's, B's) expert ids whose bus entries the partner may not read
+        (expert-token signal only) - the ablation for "does the chosen expert carry it?"."""
         A, B = self.A, self.B
         xa = A.tok(ids_a) + A.pos(torch.arange(ids_a.shape[1], device=ids_a.device))
         xb = B.tok(ids_b) + B.pos(torch.arange(ids_b.shape[1], device=ids_b.device))
@@ -176,15 +179,23 @@ class FusedPair(nn.Module):
             if not active:
                 continue
             ia = ib = None
+            la_mask, lb_mask = mask_a, mask_b
             if experts:
                 sa, sb = blk_a.moe.last_slots, blk_b.moe.last_slots
                 ia, ib = blk_a.moe.last_idx.roll(partner_roll, 0), blk_b.moe.last_idx.roll(partner_roll, 0)
+                hid_a, hid_b = hide_experts
+                if hid_b:  # A may not read these B experts
+                    gone = torch.isin(ib.flatten(1), torch.tensor(sorted(hid_b)))
+                    la_mask = mask_a | torch.cat([torch.zeros_like(gone[:, :1]), gone], 1)[:, None, :]
+                if hid_a:
+                    gone = torch.isin(ia.flatten(1), torch.tensor(sorted(hid_a)))
+                    lb_mask = mask_b | torch.cat([torch.zeros_like(gone[:, :1]), gone], 1)[:, None, :]
             elif self.signal == "moe":
                 sa, sb = cap["a"], cap["b"]
             else:
                 sa, sb = xa, xb
             ra, rb = self.links[str(l)](
-                xa, xb, sa.roll(partner_roll, 0), sb.roll(partner_roll, 0), mask_a, mask_b, ia, ib,
+                xa, xb, sa.roll(partner_roll, 0), sb.roll(partner_roll, 0), la_mask, lb_mask, ia, ib,
                 want_weights=attn is not None, rel_a=rel_a, rel_b=rel_b,
             )
             if attn is not None:

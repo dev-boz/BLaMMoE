@@ -219,3 +219,45 @@ count. Code: `blammoe/toy/reward.py`, `scripts/toy_fused_reward.py`.
 - Reading: the reward weight trades accuracy for diversity. The useful region is
   presumably in between. A sweep of the weight (e.g. 10-30x), and rewards on
   *generated* text, are the next stage-2 experiments, best run on a GPU.
+
+## Leak-proof results (safe_mask) — what survives
+
+Retrained from scratch with `safe_mask`: a partner may read a BPE token only once its
+pre-token chunk is closed, so token boundaries cannot reveal unseen chars. Both variants
+pass the audit exactly: full-text scoring equals prefix-honest scoring to 4 decimals
+(A bits/char 1.4940 = 1.4940; recall 95.1% = 95.1%). Char bias, every layer, 3000 steps,
+one seed.
+
+| safe mask | A needs B | B needs A | wrong partner | A / B bits/char (solo 1.677 / 1.835) |
+|---|---|---|---|---|
+| **translator-routed experts** | **95.1%** | **99.8%** | 11.9 / 9.2% | 1.683 / 1.858 |
+| whole residual stream (model-level) | 10.3% | 99.4% | 9.9 / 10.2% | 1.679 / 1.847 |
+
+- **Two-way expert-level cooperation survives the leak fix.**
+- **No ordinary-text gain** for either variant: the earlier gain was the leak.
+- **Expert-level beats model-level here.** With the same budget, reading B's individual
+  experts carries B's information into A (95.1%), while reading B's whole residual stream
+  does not (10.3%). The reverse direction works for both. One seed: a longer or reseeded
+  residual run could still learn.
+
+**The experts carry the signal (ablation).** Hiding a single partner expert's bus entries
+at every link, at eval time:
+
+| hidden | A needs B | B needs A |
+|---|---|---|
+| nothing | 95.1% | 99.8% |
+| **B expert 0** (A's translator's choice: 50% of its last-link attention, x6.2) | **14.0%** | n/a |
+| any other one of B's 15 experts | 93.4-95.4% | n/a |
+| **A expert 7** (B's translator's choice: 91%, x5.5) | n/a | **29.1%** |
+| any other one of A's 7 experts | n/a | 99.4-99.8% |
+
+The transfer runs almost entirely through the one expert each translator picked, and
+these are the same answer specialists the first POC found by hand from routing statistics.
+They are not the busy experts: at the last layer on ordinary text, B e0 is 0.3% of B's
+bus entries (14th of 16) and A e7 is 0.4% (8th of 8). Code: `scripts/toy_fused_hide.py`.
+
+**Still open (from the external review):** confidence intervals and 3+ seeds; a
+same-architecture, different-seed partner (Rung 2); a plain-ensemble baseline; a
+data-difference dose-response; an independent adversarial audit of the eval path before
+the OLMoE/Qwen run. The channel is narrow (a recall answer is ~3 bits) and mostly carried
+at the last layer.

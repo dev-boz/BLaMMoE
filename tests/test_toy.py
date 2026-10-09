@@ -245,3 +245,19 @@ def test_expert_attention_mass_attributes_attention_to_expert_ids():
     assert [round(x, 3) for x in r["share"]] == [0.0, 0.5, 0.5]
     assert [round(x, 3) for x in r["presence"]] == [0.25, 0.5, 0.25]
     assert [round(x, 3) for x in r["ratio"]] == [0.0, 1.0, 2.0]
+
+
+def test_hide_experts_blocks_exactly_those_bus_entries():
+    sp, b1, b2, pair = fused_setup("experts")
+    for lk in pair.links.values():
+        with torch.no_grad():
+            lk.rx_a.gate.fill_(1.0)
+            lk.rx_b.gate.fill_(1.0)
+    attn = {}
+    with torch.no_grad():
+        pair(b1.ids, b2.ids, token_ends(b1), token_ends(b2), attn=attn, hide_experts=(frozenset({0}), frozenset({2})))
+    w_ab, ids_b = attn[0]["a_reads_b"], attn[0]["b_expert_ids"].flatten(1)
+    w_ba, ids_a = attn[0]["b_reads_a"], attn[0]["a_expert_ids"].flatten(1)
+    assert torch.all(w_ab[..., 1:][(ids_b == 2)[:, None, :].expand_as(w_ab[..., 1:])] == 0)
+    assert torch.all(w_ba[..., 1:][(ids_a == 0)[:, None, :].expand_as(w_ba[..., 1:])] == 0)
+    assert w_ab[..., 1:][(ids_b != 2)[:, None, :].expand_as(w_ab[..., 1:])].sum() > 0
