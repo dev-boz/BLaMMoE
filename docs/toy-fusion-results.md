@@ -163,4 +163,34 @@ the same text makes A predict better than either model alone.
   something optimised directly.
 - "Diversity" here is measured on teacher-forced next-char predictions, not on
   free generation (lockstep generation across two tokenizers isn't built yet).
-- The traffic is late-heavy. Strong early-only transfer is not yet shown.
+- The traffic is late-heavy. Early-only transfer works (38.6%, one way) but is weaker.
+
+## Stage 2 — fine-tuning the translator on ordinary text (WP-T3)
+
+Starting from the translator-routed fusion above (frozen models, links only), 1000
+more steps on ordinary prose/code, with no split-recall forcing. A **win** for model X
+at a token = fused X right, X alone wrong, *and* the same fusion with a
+wrong-document partner wrong. So only wins that depend on what the partner said
+count. Code: `blammoe/toy/reward.py`, `scripts/toy_fused_reward.py`.
+
+| ordinary text | A bits/char | B bits/char | A novel | A right where both alone wrong (wrong partner) | split recall A / B |
+|---|---|---|---|---|---|
+| solo | 1.677 | 1.835 | n/a | n/a | 9.6 / 9.2% |
+| stage 1 fusion | 1.651 | 1.851 | 7.5% | 3.5% (2.7%) | 97.3 / 99.4% |
+| plain fine-tune | **1.626** | **1.832** | 5.5% | 2.7% (2.8%) | 52.4 / 35.8% |
+| reward, wins 3x | 1.630 | 1.832 | 6.3% | 3.1% (3.2%) | 54.8 / 37.8% |
+| reward, wins ~100x | 2.218 | 2.173 | 37.3% | 8.3% (6.3%) | 89.7 / 97.9% |
+
+- **Plain fine-tuning makes both models better fused than alone.** That is the first
+  time B gains too. A's dependence on its partner grows: wrong partner 1.814.
+  Partner-specific novelty fades, though. The fusion becomes accurate but conservative.
+- **Reward at 3x does nothing measurable.** It tracks the plain arm, and its training
+  win rate never rises.
+- **Reward at ~100x** (a weighting bug: the win term was averaged over the ~2% win tokens
+  only) is a strong diversity dial. A changes 45% of its guesses, and emergent hits
+  rise to 8.3% vs 6.3% with a wrong partner, so it is still partly partner-specific.
+  But bits/char rise to ~2.2. It also kept split-recall cooperation (90 / 98%), which
+  the gentler arms lost.
+- Reading: the reward weight trades accuracy for diversity. The useful region is
+  presumably in between. A sweep of the weight (e.g. 10-30x), and rewards on
+  *generated* text, are the next stage-2 experiments, best run on a GPU.
