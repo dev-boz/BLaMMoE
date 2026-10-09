@@ -14,6 +14,31 @@ experts); B is BPE-1024 (d=96, 16 experts). Only the links train (~0.3M
 params). Code: `blammoe/toy/fused.py`, `scripts/toy_fused*.py`. Variants live
 in `configs/toy_poc.yaml` under `fused.variants`.
 
+> **Audit (2026-10-09) — read before citing anything below.** An external review
+> flagged a possible cross-tokenizer leak, and a prefix-honest audit confirmed it.
+> B tokenizes the whole text, and where a BPE boundary falls depends on the
+> characters after it. So when A reads B's tokens "up to char i+1", their mere
+> existence tells A about char i+1, e.g. that a word is about to end. Re-scoring
+> A with B re-tokenized on the prefix only (`blammoe/toy/audit.py`,
+> `scripts/toy_fused_audit.py`; 16 docs x 255 positions):
+>
+> | A bits/char | solo | fused, as reported | fused, prefix-honest |
+> |---|---|---|---|
+> | translator-routed, char bias | 1.489 | 1.458 | **1.852** |
+> | + stage-2 plain fine-tune | 1.489 | 1.438 | **1.814** |
+> | summed MoE signal, char bias | 1.489 | 1.501 | 1.505 |
+>
+> **Withdrawn:** every ordinary-text "A better than the parts" claim below
+> (1.651, 1.626, the A+A comparison built on it, and the novelty/diversity
+> numbers for A, which rest on the same predictions). **Unaffected:**
+> split-recall cooperation (97.7% for A both ways: digits are always single
+> tokens), the expert-choice result, the depth results, and everything in
+> `toy-poc-results.md` (B reading char-level A cannot leak). Fix:
+> `safe_mask`, where a partner reads a BPE token only once its pre-token chunk is
+> closed. Tests show safe-mask scoring equals prefix-honest scoring exactly.
+> Safe-mask retrains, including expert-level vs residual-level fusion, are
+> running.
+
 ## How the fusion works
 
 A and B advance one block at a time. After each linked block, each model's
@@ -111,7 +136,7 @@ translator. Selection is also context-dependent. On ordinary text A's layer-3
 translator mostly chooses *not* to read B (59% on the null slot), and reads
 different experts when it does.
 
-## Diversity and "better than the parts" on ordinary text
+## Diversity and "better than the parts" on ordinary text (WITHDRAWN: tokenizer leak, see Audit)
 
 Measured on 48 held-out prose/code windows at the 6467 positions where both
 tokenizers have a boundary. Next-*character* predictions are compared across
@@ -165,7 +190,7 @@ the same text makes A predict better than either model alone.
   free generation (lockstep generation across two tokenizers isn't built yet).
 - The traffic is late-heavy. Early-only transfer works (38.6%, one way) but is weaker.
 
-## Stage 2 — fine-tuning the translator on ordinary text (WP-T3)
+## Stage 2 — fine-tuning the translator on ordinary text (WP-T3) (A's bits/char WITHDRAWN: see Audit)
 
 Starting from the translator-routed fusion above (frozen models, links only), 1000
 more steps on ordinary prose/code, with no split-recall forcing. A **win** for model X
