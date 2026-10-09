@@ -18,7 +18,7 @@ from blammoe.toy import setup
 from blammoe.toy.batching import make_batch
 from blammoe.toy.config import ToyPOCConfig
 from blammoe.toy.corpus import MixedSampler, split_recall_sample
-from blammoe.toy.fused import FusedPair, bits_per_char, subset_accuracy, token_ends
+from blammoe.toy.fused import run_pair, FusedPair, bits_per_char, subset_accuracy, token_ends
 from blammoe.toy.moe import load, lr_at
 from blammoe.toy.reward import partner_win_mask, win_weighted_loss
 
@@ -34,7 +34,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
     tok_a, tok_b = setup.tokenizer(cfg.model_a, cfg), setup.tokenizer(cfg.model_b, cfg)
     A, _ = load(out / "model_a.pt")
     B, _ = load(out / "model_b.pt")
-    pair = FusedPair(A, B, v["links"], fs.d_bus, fs.n_heads, v["signal"], v.get("rel_pos", False))
+    pair = FusedPair(A, B, v["links"], fs.d_bus, fs.n_heads, v["signal"], v.get("rel_pos", False), v.get("safe_mask", False))
     pair.links.load_state_dict(torch.load(out / f"fused_{v['init_from']}.pt"))
     lam = st.lam if v["stage2"] == "reward" else 0.0
     links = frozenset(int(k) for k in pair.links)
@@ -59,10 +59,10 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
         b1, b2 = make_batch(samples, tok_a, L), make_batch(samples, tok_b, L)
         e1, e2 = token_ends(b1), token_ends(b2)
         pair.train()
-        l1, l2 = pair(b1.ids, b2.ids, e1, e2)
+        l1, l2 = run_pair(pair, b1, b2)
         with torch.no_grad():  # reward bookkeeping is done for both arms, so logs are comparable
-            s1, s2 = pair(b1.ids, b2.ids, e1, e2, disabled=links)
-            w1, w2 = pair(b1.ids, b2.ids, e1, e2, partner_roll=1)
+            s1, s2 = run_pair(pair, b1, b2, disabled=links)
+            w1, w2 = run_pair(pair, b1, b2, partner_roll=1)
         win1 = partner_win_mask(l1, s1, w1, b1.targets)
         win2 = partner_win_mask(l2, s2, w2, b2.targets)
         loss = win_weighted_loss(l1, b1.targets, win1, lam) + win_weighted_loss(l2, b2.targets, win2, lam)
@@ -83,9 +83,9 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
     g1, g2 = make_batch(gen, tok_a, L), make_batch(gen, tok_b, L)
     ge1, ge2 = token_ends(g1), token_ends(g2)
     with torch.no_grad():
-        f = pair(g1.ids, g2.ids, ge1, ge2)
-        s = pair(g1.ids, g2.ids, ge1, ge2, disabled=links)
-        w = pair(g1.ids, g2.ids, ge1, ge2, partner_roll=1)
+        f = run_pair(pair, g1, g2)
+        s = run_pair(pair, g1, g2, disabled=links)
+        w = run_pair(pair, g1, g2, partner_roll=1)
     res = {"variant": variant, "spec": v, "stage2": vars(st), "lam": lam, "train": hist, "general": {
         cond: {"m1_bpc": bits_per_char(x[0], g1), "m2_bpc": bits_per_char(x[1], g2)}
         for cond, x in (("fused", f), ("shuffled_partner", w), ("solo", s))}}
@@ -98,7 +98,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
     p1 = make_batch([x.view("a") for x in splits], tok_a, L)
     p2 = make_batch([x.view("b") for x in splits], tok_b, L)
     with torch.no_grad():
-        o1, o2 = pair(p1.ids, p2.ids, token_ends(p1), token_ends(p2))
+        o1, o2 = run_pair(pair, p1, p2)
     res["split_fused"] = {
         "m1_needs_partner": subset_accuracy(o1, p1, [x.partner_answers("a") for x in splits]),
         "m2_needs_partner": subset_accuracy(o2, p2, [x.partner_answers("b") for x in splits]),

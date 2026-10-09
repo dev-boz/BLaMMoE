@@ -41,6 +41,15 @@ def token_ends(batch: Batch) -> torch.Tensor:
     return ends
 
 
+def closed_token_ends(batch: Batch) -> torch.Tensor:
+    """[B, T] chars to read before each input token is final (pads -> NEVER). Pass these as
+    a model's WRITER ends to make the fusion leak-proof across tokenizers."""
+    ends = torch.full_like(batch.ids, NEVER)
+    for i, c in enumerate(batch.closed):
+        ends[i, : len(c)] = torch.tensor(c)
+    return ends
+
+
 def read_mask(reader_ends: torch.Tensor, writer_ends: torch.Tensor) -> torch.Tensor:
     """[B, T_r, 1 + T_w] True = blocked. Column 0 is the always-open null slot."""
     blocked = writer_ends[:, None, :] > reader_ends[:, :, None]
@@ -108,13 +117,14 @@ class FusedPair(nn.Module):
     expert-tagged bus entry (receiver decides which to read); "resid" = residual."""
 
     def __init__(self, A: ToyMoELM, B: ToyMoELM, links: list[int], d_bus: int = 64, n_heads: int = 4,
-                 signal: str = "moe", rel_pos: bool = False):
+                 signal: str = "moe", rel_pos: bool = False, safe_mask: bool = False):
         super().__init__()
         if A.cfg.n_layers != B.cfg.n_layers:
             raise ValueError("lockstep fusion needs equal depth")
         if signal not in SIGNALS:
             raise ValueError(signal)
         self.A, self.B, self.signal, self.rel_pos = A, B, signal, rel_pos
+        self.safe_mask = safe_mask  # callers use run_pair, which then passes closed-chunk writer ends
         for p in list(A.parameters()) + list(B.parameters()):
             p.requires_grad_(False)
         ea, eb = (A.cfg.n_experts, B.cfg.n_experts) if signal == "experts" else (0, 0)
@@ -129,16 +139,21 @@ class FusedPair(nn.Module):
     def forward(
         self, ids_a: torch.Tensor, ids_b: torch.Tensor, ends_a: torch.Tensor, ends_b: torch.Tensor,
         *, disabled: frozenset[int] = frozenset(), partner_roll: int = 0, attn: dict | None = None,
+        write_ends_a: torch.Tensor | None = None, write_ends_b: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """``disabled``: link depths switched off. ``partner_roll``: each model hears the
         partner of a *different* document in the batch (shuffled-partner control).
         ``attn``: if a dict is given, filled with {layer: (A-reads-B, B-reads-A)} attention
-        [B, T_reader, 1 + S] (column 0 = null slot) plus the expert ids on the bus."""
+        [B, T_reader, 1 + S] (column 0 = null slot) plus the expert ids on the bus.
+        ``write_ends_*``: when each position may be READ by the partner (default: its own
+        ends). Pass ``closed_token_ends`` to stop a partner reading a BPE token before its
+        boundaries are final - otherwise those boundaries leak upcoming chars."""
         A, B = self.A, self.B
         xa = A.tok(ids_a) + A.pos(torch.arange(ids_a.shape[1], device=ids_a.device))
         xb = B.tok(ids_b) + B.pos(torch.arange(ids_b.shape[1], device=ids_b.device))
         ca, cb = _causal(ids_a.shape[1], ids_a.device), _causal(ids_b.shape[1], ids_b.device)
-        wa, wb = ends_a.roll(partner_roll, 0), ends_b.roll(partner_roll, 0)  # partner ends as writers
+        wa = (ends_a if write_ends_a is None else write_ends_a).roll(partner_roll, 0)  # partner as writer
+        wb = (ends_b if write_ends_b is None else write_ends_b).roll(partner_roll, 0)
         experts = self.signal == "experts"
         if experts:
             wa, wb = wa.repeat_interleave(A.cfg.top_k, 1), wb.repeat_interleave(B.cfg.top_k, 1)
@@ -178,6 +193,15 @@ class FusedPair(nn.Module):
             else:
                 xa, xb = ra, rb
         return A.head(A.ln_f(xa)), B.head(B.ln_f(xb))
+
+
+def run_pair(pair: "FusedPair", batch_a: Batch, batch_b: Batch, **kw):
+    """Run a fused pair on two batches of the same texts, with the right read/write ends:
+    if the pair was built with ``safe_mask``, partners may only read tokens whose
+    boundaries are final (leak-proof across tokenizers)."""
+    if pair.safe_mask:
+        kw = {"write_ends_a": closed_token_ends(batch_a), "write_ends_b": closed_token_ends(batch_b), **kw}
+    return pair(batch_a.ids, batch_b.ids, token_ends(batch_a), token_ends(batch_b), **kw)
 
 
 # --------------------------------------------------------------------------- loss / eval

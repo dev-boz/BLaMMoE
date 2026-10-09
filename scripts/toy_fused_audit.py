@@ -21,7 +21,7 @@ from blammoe.toy.audit import full_text_a_nll, honest_a_nll, prefix_inputs, to_b
 from blammoe.toy.batching import make_batch
 from blammoe.toy.config import ToyPOCConfig
 from blammoe.toy.corpus import MixedSampler, Sample, split_recall_sample
-from blammoe.toy.fused import FusedPair, token_ends
+from blammoe.toy.fused import FusedPair, closed_token_ends, run_pair, token_ends
 from blammoe.toy.moe import load
 
 DEFAULT = ["ab_experts_all_rel", "ab_experts_all_rel_plain", "ab_all_rel"]
@@ -42,7 +42,7 @@ def main(cfg_path: str, threads: int = 4, n_docs: int = 16, *variants: str) -> N
     report = {}
     for name in variants or DEFAULT:
         v = fs.variants[name]
-        pair = FusedPair(A, B, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"), v.get("rel_pos", False))
+        pair = FusedPair(A, B, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"), v.get("rel_pos", False), v.get("safe_mask", False))
         pair.links.load_state_dict(torch.load(out / f"fused_{name}.pt"))
         pair.eval()
         off = frozenset(int(k) for k in pair.links)
@@ -54,9 +54,11 @@ def main(cfg_path: str, threads: int = 4, n_docs: int = 16, *variants: str) -> N
             ea, eb = token_ends(a), token_ends(b)
             pos = [i for i in range(a.ids.shape[1]) if a.targets[0, i] != -100]
             with torch.no_grad():
-                nll["solo"].append(full_text_a_nll(pair, a, b, ea, eb, disabled=off)[0, pos])
-                nll["fused_full"].append(full_text_a_nll(pair, a, b, ea, eb)[0, pos])
-            nll["fused_honest"].append(honest_a_nll(pair, text, pos, tok_a, tok_b))
+                wk = ({"write_ends_a": closed_token_ends(a), "write_ends_b": closed_token_ends(b)}
+                      if pair.safe_mask else {})
+                nll["solo"].append(full_text_a_nll(pair, a, b, ea, eb, disabled=off, **wk)[0, pos])
+                nll["fused_full"].append(full_text_a_nll(pair, a, b, ea, eb, **wk)[0, pos])
+            nll["fused_honest"].append(honest_a_nll(pair, text, pos, tok_a, tok_b, safe=pair.safe_mask))
             is_letter += [text[i + 1].isalpha() for i in pos]
         letter = torch.tensor(is_letter)
         cat = {k: torch.cat(x) for k, x in nll.items()}
@@ -75,17 +77,18 @@ def main(cfg_path: str, threads: int = 4, n_docs: int = 16, *variants: str) -> N
                 continue
             tgt = a.targets[0, pos]
             with torch.no_grad():
-                la, _ = pair(a.ids, b.ids, ea, eb)
-                ls, _ = pair(a.ids, b.ids, ea, eb, disabled=off)
+                la, _ = run_pair(pair, a, b)
+                ls, _ = run_pair(pair, a, b, disabled=off)
             rec["fused_full"].append(la[0, pos].argmax(-1) == tgt)
             rec["solo"].append(ls[0, pos].argmax(-1) == tgt)
             # honest: B gets ITS OWN view, re-tokenized on the prefix; A its own view
             hon = []  # one prefix per answer position
             for p in pos:
-                ia, ea2, _, _, t, last = prefix_inputs(sa.text, [p], tok_a, tok_b)
-                _, _, ib, eb2, _, _ = prefix_inputs(sb.text, [p], tok_a, tok_b)
+                ia, ea2, _, _, t, last, cla, _ = prefix_inputs(sa.text, [p], tok_a, tok_b)
+                _, _, ib, eb2, _, _, _, clb = prefix_inputs(sb.text, [p], tok_a, tok_b)
+                wk = {"write_ends_a": cla, "write_ends_b": clb} if pair.safe_mask else {}
                 with torch.no_grad():
-                    lh, _ = pair(ia, ib, ea2, eb2)
+                    lh, _ = pair(ia, ib, ea2, eb2, **wk)
                 hon.append(lh[0, last[0]].argmax(-1) == t[0])
             rec["fused_honest"].append(torch.stack(hon))
         recall = {k: float(torch.cat(x).float().mean()) for k, x in rec.items()}

@@ -44,8 +44,9 @@ def _ends(offsets: list[list[tuple[int, int]]], T: int) -> torch.Tensor:
 def prefix_inputs(text: str, positions: list[int], tok_a, tok_b):
     """For each A input position i (A has read text[:i+1] and predicts text[i+1]):
     A gets chars 0..i, B gets tokenize(text[:i+1]) - every token as input, none
-    peeking past char i+1. Returns (ids_a, ends_a, ids_b, ends_b, target_a, last_a)."""
-    a_seqs, a_offs, b_seqs, b_offs, tgt = [], [], [], [], []
+    peeking past char i+1. Returns (ids_a, ends_a, ids_b, ends_b, target_a, last_a,
+    closed_a, closed_b); the last two are writer ends for a safe-mask fusion."""
+    a_seqs, a_offs, b_seqs, b_offs, tgt, a_cl, b_cl = [], [], [], [], [], [], []
     for i in positions:
         prefix = text[: i + 1]
         ia, oa = tok_a.encode(prefix)
@@ -55,20 +56,28 @@ def prefix_inputs(text: str, positions: list[int], tok_a, tok_b):
         a_offs.append(oa)
         b_seqs.append(ib)
         b_offs.append(ob)
+        a_cl.append([(0, c) for c in tok_a.closed_ends(prefix, oa)])
+        b_cl.append([(0, c) for c in tok_b.closed_ends(prefix, ob)])
         tgt.append(tok_a.encode(text[i + 1])[0][0])
     ids_a, ids_b = _pad(a_seqs, tok_a.pad_id), _pad(b_seqs, tok_b.pad_id)
     return (ids_a, _ends(a_offs, ids_a.shape[1]), ids_b, _ends(b_offs, ids_b.shape[1]),
-            torch.tensor(tgt), torch.tensor([len(s) - 1 for s in a_seqs]))
+            torch.tensor(tgt), torch.tensor([len(s) - 1 for s in a_seqs]),
+            _ends(a_cl, ids_a.shape[1]), _ends(b_cl, ids_b.shape[1]))
 
 
 @torch.no_grad()
 def honest_a_nll(
-    pair: FusedPair, text: str, positions: list[int], tok_a, tok_b, batch: int = 64, **fwd_kw
+    pair: FusedPair, text: str, positions: list[int], tok_a, tok_b, batch: int = 64, safe: bool = False,
+    **fwd_kw,
 ) -> torch.Tensor:
-    """A's NLL (nats) of text[i+1] at each position i, partner re-run on the prefix only."""
+    """A's NLL (nats) of text[i+1] at each position i, partner re-run on the prefix only.
+    ``safe``: score a fusion that uses closed-chunk writer ends (as it was trained)."""
     out = []
     for k in range(0, len(positions), batch):
-        ids_a, ends_a, ids_b, ends_b, tgt, last = prefix_inputs(text, positions[k : k + batch], tok_a, tok_b)
+        ids_a, ends_a, ids_b, ends_b, tgt, last, cl_a, cl_b = prefix_inputs(
+            text, positions[k : k + batch], tok_a, tok_b)
+        if safe:
+            fwd_kw = {**fwd_kw, "write_ends_a": cl_a, "write_ends_b": cl_b}
         la, _ = pair(ids_a, ids_b, ends_a, ends_b, **fwd_kw)
         lp = la[torch.arange(len(last)), last].log_softmax(-1)
         out.append(-lp[torch.arange(len(tgt)), tgt])

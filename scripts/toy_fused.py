@@ -18,7 +18,7 @@ from blammoe.toy import setup
 from blammoe.toy.batching import make_batch
 from blammoe.toy.config import ToyPOCConfig
 from blammoe.toy.corpus import MixedSampler, split_recall_sample
-from blammoe.toy.fused import FusedPair, bits_per_char, pair_loss, subset_accuracy, token_ends
+from blammoe.toy.fused import run_pair, FusedPair, bits_per_char, pair_loss, subset_accuracy, token_ends
 from blammoe.toy.moe import load
 
 
@@ -36,7 +36,7 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
     m2, t2 = models[v["pair"][1]]
     if m2 is m1:
         m2 = copy.deepcopy(m1)  # self-fusion control: two copies of the same model
-    pair = FusedPair(m1, m2, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"), v.get("rel_pos", False))
+    pair = FusedPair(m1, m2, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"), v.get("rel_pos", False), v.get("safe_mask", False))
     t0 = time.time()
     logf = open(out / f"fused_{variant}.log", "w")
 
@@ -73,7 +73,7 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
     steps = v.get("steps", fs.steps)
     for step in range(steps):
         b1, b2, e1, e2 = encode(draw(fs.batch_size))
-        l1, l2 = pair(b1.ids, b2.ids, e1, e2)
+        l1, l2 = run_pair(pair, b1, b2)
         loss = pair_loss(l1, b1, fs.answer_weight) + pair_loss(l2, b2, fs.answer_weight)
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -100,7 +100,7 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
 
     def split_eval(**kw):
         with torch.no_grad():
-            o1, o2 = pair(s1.ids, s2.ids, se1, se2, **kw)
+            o1, o2 = run_pair(pair, s1, s2, **kw)
         return {
             "m1_needs_partner": subset_accuracy(o1, s1, [s.partner_answers("a") for s in splits]),
             "m1_own": subset_accuracy(o1, s1, [s.own_answers("a") for s in splits]),
@@ -110,7 +110,7 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
 
     def gen_eval(**kw):
         with torch.no_grad():
-            o1, o2 = pair(g1.ids, g2.ids, ge1, ge2, **kw)
+            o1, o2 = run_pair(pair, g1, g2, **kw)
         return {"m1_bpc": bits_per_char(o1, g1), "m2_bpc": bits_per_char(o2, g2)}
 
     res = {"variant": variant, "spec": v, "bridge_params": n_params, "train": history,

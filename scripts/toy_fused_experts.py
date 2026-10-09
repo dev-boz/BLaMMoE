@@ -19,7 +19,7 @@ from blammoe.toy import setup
 from blammoe.toy.batching import answer_positions, make_batch
 from blammoe.toy.config import ToyPOCConfig
 from blammoe.toy.corpus import MixedSampler, split_recall_sample
-from blammoe.toy.fused import FusedPair, expert_attention_mass, token_ends
+from blammoe.toy.fused import FusedPair, expert_attention_mass, run_pair
 from blammoe.toy.moe import load
 
 
@@ -43,7 +43,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
     (m1, t1), (m2, t2) = models[v["pair"][0]], models[v["pair"][1]]
     if m2 is m1:
         m2 = copy.deepcopy(m1)
-    pair = FusedPair(m1, m2, v["links"], fs.d_bus, fs.n_heads, "experts", v.get("rel_pos", False))
+    pair = FusedPair(m1, m2, v["links"], fs.d_bus, fs.n_heads, "experts", v.get("rel_pos", False), v.get("safe_mask", False))
     pair.links.load_state_dict(torch.load(out / f"fused_{variant}.pt"))
     pair.eval()
 
@@ -64,7 +64,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
     }.items():
         attn = {}
         with torch.no_grad():
-            pair(b1.ids, b2.ids, token_ends(b1), token_ends(b2), attn=attn)
+            run_pair(pair, b1, b2, attn=attn)
         res[name] = {}
         for l, a in attn.items():
             res[name][l] = {

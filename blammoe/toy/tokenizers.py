@@ -10,11 +10,15 @@ Both expose ``encode(text) -> (ids, offsets)`` with HF-style char offsets.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from tokenizers import Regex, Tokenizer, models, pre_tokenizers, trainers
 
 PAD = "<pad>"
+# BPE pre-tokenizer chunks: whitespace runs, letter runs, single other chars (digits included).
+# Merges never cross a chunk, so a token's boundaries are settled once its chunk is closed.
+CHUNK = re.compile(r"\s+|[A-Za-z]+|[^A-Za-z\s]")
 
 
 class CharTokenizer:
@@ -30,6 +34,10 @@ class CharTokenizer:
 
     def encode(self, text: str) -> tuple[list[int], list[tuple[int, int]]]:
         return [self.stoi[c] for c in text], [(i, i + 1) for i in range(len(text))]
+
+    def closed_ends(self, text: str, offsets: list[tuple[int, int]]) -> list[int]:
+        """Chars that must be read before each token is final: a char token is final at once."""
+        return [e for _, e in offsets]
 
     def token_id(self, s: str) -> int:
         return self.stoi[s]
@@ -70,6 +78,22 @@ class BPETokenizer:
     def encode(self, text: str) -> tuple[list[int], list[tuple[int, int]]]:
         enc = self.tok.encode(text)
         return enc.ids, [tuple(o) for o in enc.offsets]
+
+    def closed_ends(self, text: str, offsets: list[tuple[int, int]]) -> list[int]:
+        """Chars that must be read before each token's boundaries are final.
+
+        A token in a single-char chunk (punctuation, a digit) is final when read. A token
+        in a run (letters, whitespace) is final only once the char AFTER the run is read,
+        because until then the run - and so BPE's split of it - could still grow. A
+        partner that reads this token before then learns about chars it has not seen.
+        """
+        closed = {}
+        for m in CHUNK.finditer(text):
+            s, t = m.span()
+            run = text[s].isspace() or text[s].isalpha()
+            for i in range(s, t):
+                closed[i] = t + 1 if run else t
+        return [closed[e - 1] for _, e in offsets]
 
     def token_id(self, s: str) -> int:
         tid = self.tok.token_to_id(s)

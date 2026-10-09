@@ -57,6 +57,10 @@ fused:                # WP-T2: both models in lockstep, bidirectional links (scr
     ab_early_rel:       {pair: ab, links: [0], signal: moe, rel_pos: true, steps: 3000}
     ab_experts_all_rel: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, steps: 3000}
     aa_experts_all_rel: {pair: aa, links: [0, 1, 2, 3], signal: experts, rel_pos: true, steps: 3000}  # capacity control
+    # leak-proof (safe_mask): a partner may read a BPE token only once its pre-token chunk is
+    # closed, so token boundaries cannot reveal unseen chars (see blammoe/toy/audit.py)
+    ab_experts_all_rel_safe: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000}
+    ab_resid_all_rel_safe:   {pair: ab, links: [0, 1, 2, 3], signal: resid, rel_pos: true, safe_mask: true, steps: 3000}  # model-level baseline
     # WP-T3 stage 2: continue ab_experts_all_rel's links on ordinary text only (scripts/toy_fused_reward.py)
     ab_experts_all_rel_plain:  {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, init_from: ab_experts_all_rel, stage2: plain}
     ab_experts_all_rel_reward: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, init_from: ab_experts_all_rel, stage2: reward}

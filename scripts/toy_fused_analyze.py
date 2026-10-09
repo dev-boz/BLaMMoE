@@ -17,7 +17,7 @@ from blammoe.toy import setup
 from blammoe.toy.batching import make_batch
 from blammoe.toy.config import ToyPOCConfig
 from blammoe.toy.corpus import MixedSampler
-from blammoe.toy.fused import FusedPair, char_predictions, diversity, first_char_matrix, token_ends
+from blammoe.toy.fused import run_pair, FusedPair, char_predictions, diversity, first_char_matrix, token_ends
 from blammoe.toy.moe import load
 from blammoe.toy.tokenizers import CharTokenizer
 
@@ -34,7 +34,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
     (m1, t1), (m2, t2) = models[v["pair"][0]], models[v["pair"][1]]
     if m2 is m1:
         m2 = copy.deepcopy(m1)
-    pair = FusedPair(m1, m2, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"), v.get("rel_pos", False))
+    pair = FusedPair(m1, m2, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"), v.get("rel_pos", False), v.get("safe_mask", False))
     pair.links.load_state_dict(torch.load(out / f"fused_{variant}.pt"))
     pair.eval()
 
@@ -50,7 +50,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
 
     def preds(**kw):
         with torch.no_grad():
-            o1, o2 = pair(b1.ids, b2.ids, e1, e2, **kw)
+            o1, o2 = run_pair(pair, b1, b2, **kw)
         return char_predictions(o1, b1, M1), char_predictions(o2, b2, M2)
 
     solo1, solo2 = preds(disabled=links)
