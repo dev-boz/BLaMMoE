@@ -15,7 +15,7 @@ from blammoe.toy.moe import ToyMoELM, lr_at
 @torch.no_grad()
 def recall_accuracy(model: ToyMoELM, tokenizer, samples, max_len: int, blind: bool = False) -> float:
     """Top-1 accuracy on the ask-section answer digits."""
-    b = make_batch(samples, tokenizer, max_len, blind=blind)
+    b = make_batch(samples, tokenizer, max_len, blind=blind, device=next(model.parameters()).device)
     m = answer_mask(b)
     pred = model(b.ids).argmax(-1)
     return float((pred[m] == b.targets[m]).float().mean())
@@ -39,7 +39,8 @@ def train_lm(
         model.train()
         for g in opt.param_groups:
             g["lr"] = lr_at(step, steps, lr)
-        b = make_batch([sampler.sample() for _ in range(batch_size)], tokenizer, model.cfg.max_len)
+        b = make_batch([sampler.sample() for _ in range(batch_size)], tokenizer, model.cfg.max_len,
+                       device=next(model.parameters()).device)
         logits = model(b.ids)
         lm = F.cross_entropy(logits.flatten(0, 1), b.targets.flatten(), ignore_index=-100)
         loss = lm + model.cfg.aux_loss_coef * model.aux_loss()

@@ -37,15 +37,15 @@ CONTROLS = ("matched", "shuffled_doc", "blind_a", "random")
 # --------------------------------------------------------------------------- alignment
 def b_end_chars(batch: Batch) -> torch.Tensor:
     """[B, T] end char of each B input token (pads -> 1 so their mask row is non-empty)."""
-    ends = torch.ones_like(batch.ids)
+    ends = torch.ones(batch.ids.shape, dtype=torch.long)
     for i, off in enumerate(batch.offsets):
         ends[i, : len(off)] = torch.tensor([e for _, e in off])
-    return ends
+    return ends.to(batch.ids.device)
 
 
 def causal_block_mask(ends: torch.Tensor, n_a: int) -> torch.Tensor:
     """[B, T_b, T_a] True where A char position > (B token end - 1): not yet read by B."""
-    return torch.arange(n_a)[None, None, :] > (ends[:, :, None] - 1)
+    return torch.arange(n_a, device=ends.device)[None, None, :] > (ends[:, :, None] - 1)
 
 
 def gather_aligned(h_a: torch.Tensor, ends: torch.Tensor) -> torch.Tensor:
@@ -83,7 +83,7 @@ def control_signal(
         return source(model_a, a_blind.ids)
     if control == "random":  # matched per-position norm, no content
         h = source(model_a, a_clean.ids)
-        r = torch.randn(h.shape, generator=gen)
+        r = torch.randn(h.shape, generator=gen).to(h.device)  # CPU generator: same draws on any device
         return r * h.norm(dim=-1, keepdim=True) / r.norm(dim=-1, keepdim=True).clamp_min(1e-8)
     raise ValueError(control)
 

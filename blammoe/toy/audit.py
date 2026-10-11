@@ -76,11 +76,13 @@ def honest_a_nll(
     for k in range(0, len(positions), batch):
         ids_a, ends_a, ids_b, ends_b, tgt, last, cl_a, cl_b = prefix_inputs(
             text, positions[k : k + batch], tok_a, tok_b)
+        dev = next(pair.parameters()).device
         if safe:
-            fwd_kw = {**fwd_kw, "write_ends_a": cl_a, "write_ends_b": cl_b}
-        la, _ = pair(ids_a, ids_b, ends_a, ends_b, **fwd_kw)
-        lp = la[torch.arange(len(last)), last].log_softmax(-1)
-        out.append(-lp[torch.arange(len(tgt)), tgt])
+            fwd_kw = {**fwd_kw, "write_ends_a": cl_a.to(dev), "write_ends_b": cl_b.to(dev)}
+        la, _ = pair(ids_a.to(dev), ids_b.to(dev), ends_a.to(dev), ends_b.to(dev), **fwd_kw)
+        rows = torch.arange(len(last), device=dev)
+        lp = la[rows, last.to(dev)].log_softmax(-1)
+        out.append(-lp[rows, tgt.to(dev)].cpu())
     return torch.cat(out)
 
 

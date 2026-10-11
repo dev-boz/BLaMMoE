@@ -22,6 +22,8 @@ anything (and no softmax row is ever empty).
 """
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -35,19 +37,19 @@ NEVER = 10**9  # end-char for padding: unreadable as a writer
 
 def token_ends(batch: Batch) -> torch.Tensor:
     """[B, T] chars read by each input position (pads -> NEVER)."""
-    ends = torch.full_like(batch.ids, NEVER)
+    ends = torch.full(batch.ids.shape, NEVER, dtype=torch.long)
     for i, off in enumerate(batch.offsets):
         ends[i, : len(off)] = torch.tensor([e for _, e in off])
-    return ends
+    return ends.to(batch.ids.device)
 
 
 def closed_token_ends(batch: Batch) -> torch.Tensor:
     """[B, T] chars to read before each input token is final (pads -> NEVER). Pass these as
     a model's WRITER ends to make the fusion leak-proof across tokenizers."""
-    ends = torch.full_like(batch.ids, NEVER)
+    ends = torch.full(batch.ids.shape, NEVER, dtype=torch.long)
     for i, c in enumerate(batch.closed):
         ends[i, : len(c)] = torch.tensor(c)
-    return ends
+    return ends.to(batch.ids.device)
 
 
 def read_mask(reader_ends: torch.Tensor, writer_ends: torch.Tensor) -> torch.Tensor:
@@ -185,10 +187,10 @@ class FusedPair(nn.Module):
                 ia, ib = blk_a.moe.last_idx.roll(partner_roll, 0), blk_b.moe.last_idx.roll(partner_roll, 0)
                 hid_a, hid_b = hide_experts
                 if hid_b:  # A may not read these B experts
-                    gone = torch.isin(ib.flatten(1), torch.tensor(sorted(hid_b)))
+                    gone = torch.isin(ib.flatten(1), torch.tensor(sorted(hid_b), device=ib.device))
                     la_mask = mask_a | torch.cat([torch.zeros_like(gone[:, :1]), gone], 1)[:, None, :]
                 if hid_a:
-                    gone = torch.isin(ia.flatten(1), torch.tensor(sorted(hid_a)))
+                    gone = torch.isin(ia.flatten(1), torch.tensor(sorted(hid_a), device=ia.device))
                     lb_mask = mask_b | torch.cat([torch.zeros_like(gone[:, :1]), gone], 1)[:, None, :]
             elif self.signal == "moe":
                 sa, sb = cap["a"], cap["b"]
@@ -251,7 +253,7 @@ def bits_per_char(logits: torch.Tensor, batch: Batch) -> float:
     """
     nll = F.cross_entropy(logits.flatten(0, 1), batch.targets.flatten(), ignore_index=-100, reduction="sum")
     chars = sum(full[-1][1] - full[0][1] for full in batch.full_offsets)
-    return float(nll / chars / torch.log(torch.tensor(2.0)))
+    return float(nll) / chars / math.log(2)
 
 
 # --------------------------------------------------------------------------- diversity of thinking
@@ -271,7 +273,7 @@ def first_char_matrix(tokenizer, chars: list[str]) -> torch.Tensor:
 @torch.no_grad()
 def char_predictions(logits: torch.Tensor, batch: Batch, M: torch.Tensor) -> dict[tuple[int, int], torch.Tensor]:
     """{(sample, chars_read): next-char distribution} at every valid position."""
-    p = logits.softmax(-1) @ M
+    p = logits.softmax(-1) @ M.to(logits.device)
     out = {}
     for i, full in enumerate(batch.full_offsets):
         for t in range(len(full) - 1):
@@ -299,7 +301,7 @@ def diversity(solo: dict, fused: dict, partner_solo: dict, texts: list[str], cha
     S = torch.stack([solo[k] for k in keys])
     F_ = torch.stack([fused[k] for k in keys])
     P = torch.stack([partner_solo[k] for k in keys])
-    y = torch.tensor([col[texts[i][e]] for i, e in keys])
+    y = torch.tensor([col[texts[i][e]] for i, e in keys], device=S.device)
     s, f, pp = S.argmax(-1), F_.argmax(-1), P.argmax(-1)
     both_wrong = (s != y) & (pp != y)
     novel = (f != s) & (f != pp)
