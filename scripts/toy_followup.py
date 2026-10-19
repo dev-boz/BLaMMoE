@@ -9,7 +9,13 @@ B layer/expert where toy_poc found transmission, and asks:
      i.e. is the alignment general, or did the map learn the task?
   3. how many paired positions does the map need;
   4. what the transplant does to B's ordinary-text loss (interference);
-  5. a longer learned-bridge run.
+  5. a longer learned-bridge run, from a routed-only AND a dense A source (rule 8: only the
+     routed one can support an expert-level claim).
+
+Transplant scores are reported for the ``native`` expert swap (only where B routed its target
+expert, at its router weight) and the ``dense_additive`` control (the original hook). All
+choices (target B layer, A specialist/unrelated experts) are made on the seed-2023 selection
+set; only the seed-2024 set is reported.
 
     PYTHONPATH=. python scripts/toy_followup.py configs/toy_poc.yaml [threads] [bridge_steps]
 """
@@ -25,7 +31,8 @@ from blammoe.align import apply, fit_linear
 from blammoe.toy import setup
 from blammoe.toy.bridge import (
     Bridge, Source, b_end_chars, causal_block_mask, encode_pair, eval_bridge, gather_aligned, lm_loss,
-    paired_expert_states, routing_at_answers, score_answers, train_bridge, transplant_hook,
+    native_transplant_hook, paired_expert_states, routing_at_answers, score_answers, train_bridge,
+    transplant_hook,
 )
 from blammoe.toy.config import ToyPOCConfig
 from blammoe.toy.corpus import MixedSampler
@@ -54,6 +61,7 @@ def main(cfg_path: str, threads: int = 4, bridge_steps: int = 3000) -> None:
     texts = (base.prose, base.code)
     ev = encode_pair(setup.eval_recall_samples(cfg, n=96, seed=2024), tok_a, tok_b, L)
     a_clean, a_blind, _, b_blind = ev
+    s_clean_a = encode_pair(setup.eval_recall_samples(cfg, n=96, seed=2023), tok_a, tok_b, L)[0]  # selection only
     ends = b_end_chars(b_blind)
     gen = MixedSampler(*texts, L, p_recall=0.0, seed=777)
     g_a, _, g_b, _ = encode_pair([gen.sample() for _ in range(48)], tok_a, tok_b, L)
@@ -61,8 +69,8 @@ def main(cfg_path: str, threads: int = 4, bridge_steps: int = 3000) -> None:
     with torch.no_grad():
         g_base = lm_loss(B(g_b.ids), g_b)
 
-    # target: the B layer/expert where toy_poc's transplant worked best (alpha=1)
-    lb = max(poc["transplant"], key=lambda k: poc["transplant"][k]["alpha"]["1.0"]["matched"]["acc"])
+    # target: the B layer/expert where toy_poc's native transplant worked best ON THE SELECTION SET
+    lb = max(poc["transplant"], key=lambda k: poc["transplant"][k]["selection_native_acc"])
     lb, eb = int(lb), poc["transplant"][lb]["B_expert"]
     log(f"target B layer {lb} expert {eb}; B general LM loss {g_base:.3f}")
 
@@ -83,12 +91,13 @@ def main(cfg_path: str, threads: int = 4, bridge_steps: int = 3000) -> None:
         sig = {"matched": src(A, a_clean.ids), "shuffled_doc": src(A, a_clean.ids).roll(1, dims=0),
                "blind_a": src(A, a_blind.ids)}
         row = {"n_pairs": len(HA)}
-        for name, h in sig.items():
-            with transplant_hook(B, lb, eb, translate(W, gather_aligned(h, ends)), 1.0), torch.no_grad():
-                row[name] = score_answers(B(b_blind.ids), b_blind)["acc"]
-        with transplant_hook(B, lb, eb, translate(W, gather_aligned(src(A, g_a.ids), g_ends)), 1.0), \
-                torch.no_grad():
-            row["general_lm_loss"] = lm_loss(B(g_b.ids), g_b)
+        for mode, hook in (("native", native_transplant_hook), ("dense_additive", transplant_hook)):
+            row[mode] = {}
+            for name, h in sig.items():
+                with hook(B, lb, eb, translate(W, gather_aligned(h, ends)), 1.0), torch.no_grad():
+                    row[mode][name] = score_answers(B(b_blind.ids), b_blind)["acc"]
+            with hook(B, lb, eb, translate(W, gather_aligned(src(A, g_a.ids), g_ends)), 1.0), torch.no_grad():
+                row[mode]["general_lm_loss"] = lm_loss(B(g_b.ids), g_b)
         return row
 
     res = {"target": {"B_layer": lb, "B_expert": eb}, "B_general_lm_loss": g_base}
@@ -96,7 +105,7 @@ def main(cfg_path: str, threads: int = 4, bridge_steps: int = 3000) -> None:
     # 1. which A expert / depth / signal
     grid = {}
     for la in range(A.cfg.n_layers):
-        route = routing_at_answers(A, a_clean, la)
+        route = routing_at_answers(A, s_clean_a, la)
         spec, unrel = int(route.argmax()), int(route.argmin())
         for tag, e in (("specialist", spec), ("unrelated", unrel)):
             for signal in ("expert_dense", "expert_routed"):
@@ -108,10 +117,10 @@ def main(cfg_path: str, threads: int = 4, bridge_steps: int = 3000) -> None:
         log(f"{key}: {grid[key]}")
     res["grid"] = grid
 
-    # 2. map fitted with NO recall docs at all; 3. data-size sweep (both on A3 specialist dense)
+    # 2. map fitted with NO recall docs at all; 3. data-size sweep (both on A3 specialist, routed-only)
     la = A.cfg.n_layers - 1
-    spec = int(routing_at_answers(A, a_clean, la).argmax())
-    src = Source(la, spec, "expert_dense")
+    spec = int(routing_at_answers(A, s_clean_a, la).argmax())
+    src = Source(la, spec, "expert_routed")
     res["fit_general_only"] = run(src, fit_general)
     log(f"fit on prose+code only: {res['fit_general_only']}")
     res["pairs_sweep"] = {}
@@ -119,23 +128,24 @@ def main(cfg_path: str, threads: int = 4, bridge_steps: int = 3000) -> None:
         res["pairs_sweep"][n] = run(src, fit_mixed, max_pairs=n)
         log(f"pairs={n}: {res['pairs_sweep'][n]}")
 
-    # 5. longer learned bridge (specialist dense), at the configured mid layer and B's last layer
+    # 5. longer learned bridge (specialist, routed-only and dense), at the configured mid layer and B's last layer
     bs = cfg.bridge
     res["long_bridge"] = {}
-    for layer_b in sorted({bs.layer_b, B.cfg.n_layers - 1}):
+    for kind, layer_b in [(k, lb_) for k in ("expert_routed", "expert_dense") for lb_ in sorted({bs.layer_b, B.cfg.n_layers - 1})]:
+        src = Source(la, spec, kind)
         torch.manual_seed(0)
         bridge = Bridge(A.cfg.d_model, B.cfg.d_model, bs.d_bus, bs.n_heads)
         sampler = MixedSampler(*texts, L, p_recall=cfg.p_recall, seed=4242)
         hist = train_bridge(bridge, A, B, src, layer_b, lambda n: [sampler.sample() for _ in range(n)],
                             tok_a, tok_b, L, steps=bridge_steps, batch_size=bs.batch_size, lr=bs.lr,
-                            answer_weight=bs.answer_weight, log=lambda m: log(f"  bridge@{layer_b} {m}"))
+                            answer_weight=bs.answer_weight, log=lambda m: log(f"  bridge {kind}@{layer_b} {m}"))
         scores = eval_bridge(bridge, A, B, src, layer_b, ev)
         with torch.no_grad(), bridge.hook(B, layer_b, src(A, g_a.ids), causal_block_mask(g_ends, g_a.ids.shape[1])):
             g_loss = lm_loss(B(g_b.ids), g_b)
-        res["long_bridge"][layer_b] = {"steps": bridge_steps, "eval": scores, "train": hist,
+        res["long_bridge"][f"{kind}@B{layer_b}"] = {"steps": bridge_steps, "eval": scores, "train": hist,
                                        "general_lm_loss": g_loss,
                                        "final_gate": float(torch.tanh(bridge.rx.gate.detach()))}
-        log(f"long bridge @B{layer_b}: " + " ".join(f"{c}={s['acc']:.3f}" for c, s in scores.items())
+        log(f"long bridge {kind}@B{layer_b}: " + " ".join(f"{c}={s['acc']:.3f}" for c, s in scores.items())
             + f" | general LM loss {g_loss:.3f}")
 
     (out / "followup_results.json").write_text(json.dumps(res, indent=1))

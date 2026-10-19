@@ -3,7 +3,8 @@
 For a trained expert-token fused pair, report per link and direction the
 attention share on each partner expert vs its share of the bus (ratio > 1 =
 sought out), at (a) split-recall answer positions that need the partner and
-(b) all positions of ordinary text. Writes <out_dir>/fused_<variant>_experts.json.
+(b) all positions of ordinary text. The split windows come from their own seed (2026), so the
+"chosen" expert is identified on documents the hide ablation never scores. Writes <out_dir>/fused_<variant>_experts.json.
 
     PYTHONPATH=. python scripts/toy_fused_experts.py configs/toy_poc.yaml <variant> [threads]
 """
@@ -47,7 +48,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
     pair.links.load_state_dict(torch.load(out / f"fused_{variant}.pt"))
     pair.eval()
 
-    rng = random.Random(2025)
+    rng = random.Random(2026)  # selection set: NOT the seed-2025 set the hide ablation and evals report on
     splits = [split_recall_sample(rng, L) for _ in range(48)]
     s1 = make_batch([s.view("a") for s in splits], t1, L)
     s2 = make_batch([s.view("b") for s in splits], t2, L)

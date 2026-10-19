@@ -8,8 +8,8 @@ import torch
 from blammoe.hooks import ExpertCapture, expert_path
 from blammoe.toy.batching import answer_mask, answer_positions, make_batch
 from blammoe.toy.bridge import (
-    Bridge, Source, b_end_chars, causal_block_mask, encode_pair, gather_aligned, train_bridge,
-    transplant_hook,
+    Bridge, Source, b_end_chars, causal_block_mask, encode_pair, gather_aligned, native_transplant_hook,
+    train_bridge, transplant_hook,
 )
 from blammoe.toy.corpus import MASK, recall_doc, recall_sample
 from blammoe.toy.moe import ToyMoEConfig, ToyMoELM
@@ -102,6 +102,45 @@ def test_transplant_with_own_output_and_zero_gate_bridge_are_no_ops():
         with bridge.hook(B, 1, h, causal_block_mask(b_end_chars(b_blind), h.shape[1])):
             assert torch.equal(B(b_blind.ids), base)
     assert answer_mask(b_blind).sum() > 0
+
+
+def _moe_io(B, layer, ids):
+    """(MoE input, MoE output) at ``layer`` for one forward pass."""
+    cap = {}
+    h = B.layers[layer].moe.register_forward_hook(lambda m, i, o: cap.update(x=i[0], y=o))
+    try:
+        B(ids)
+    finally:
+        h.remove()
+    return cap["x"], cap["y"]
+
+
+def test_native_transplant_swaps_only_routed_tokens_at_router_weight():
+    """The expert-level swap: unrouted tokens untouched for ANY signal; routed tokens lose exactly
+    w * e_j(x) when the signal is zero; the expert's own output is a no-op."""
+    samples, ta, tb, A, B = setup_pair()
+    _, _, _, b_blind = encode_pair(samples, ta, tb, 128)
+    layer, e = 1, 3
+    with torch.no_grad():
+        x, base = _moe_io(B, layer, b_blind.ids)
+        moe = B.layers[layer].moe
+        w, idx = moe.router(x).softmax(-1).topk(moe.top_k, dim=-1)
+        routed = (idx == e).any(-1)
+        weight = (w * (idx == e)).sum(-1, keepdim=True)
+        assert routed.any() and (~routed).any()
+        noise = torch.randn_like(base)
+        with native_transplant_hook(B, layer, e, noise, alpha=1.0):
+            _, y = _moe_io(B, layer, b_blind.ids)
+        assert torch.equal(y[~routed], base[~routed])
+        with native_transplant_hook(B, layer, e, torch.zeros_like(base), alpha=1.0):
+            _, y0 = _moe_io(B, layer, b_blind.ids)
+        assert torch.allclose(y0, base - weight * moe.experts[e](x), atol=1e-6)
+        own, logits = B.expert_outputs(b_blind.ids, layer, e)["out"], B(b_blind.ids)
+        with native_transplant_hook(B, layer, e, own, alpha=1.0):
+            assert torch.allclose(B(b_blind.ids), logits, atol=1e-5)
+        with transplant_hook(B, layer, e, noise, alpha=1.0):  # the old dense-additive control
+            _, yd = _moe_io(B, layer, b_blind.ids)
+        assert not torch.allclose(yd[~routed], base[~routed])
 
 
 def test_train_bridge_moves_gate_and_keeps_models_frozen():
