@@ -1,11 +1,53 @@
-# Handoff — BLaMMoE, state as of 2026-10-19
+# Handoff — BLaMMoE, state as of 2026-10-19 (evening)
 
-For whoever picks this up next, human or agent, on a local machine. Everything is on
-branch **`claude/new-session-f94vqn`** of `dev-boz/BLaMMoE`. `main` only has the original
-foundation commit. Read `CLAUDE.md` first: it is the working agreement and now includes
-the rules learned the hard way below.
+For whoever picks this up next, human or agent. Read `CLAUDE.md` first (working agreement).
+`main` has the toy programme (PR #1 merged). Audit fixes are in progress on local branch
+**`audit-fixes`** (not yet committed or pushed: check `git status`).
 
-## Where things stand (one paragraph)
+## Project goal (from the owner)
+
+Step one is proving that experts can be translated between models **at all**. Improvements
+are a bonus. Mixing e.g. a Qwen with a Mistral and getting a *worse* result still counts as
+success. So prioritise work that makes "information transfers, and it travels via experts"
+airtight over ordinary-text quality.
+
+## START HERE: audit fixes in progress
+
+A 3-model adversarial audit (Claude, Codex GPT-6.1-Sol, Gemini 3.8 Flash) is merged in
+`docs/audit-2026-10-19.md`, with the status table at the top. Raw reports and probes are
+in `docs/audit-2026-10-19/`.
+- **No leak was found in safe-mask fusion.** The weak points are attribution, data hygiene and stale numbers.
+- **Done on `audit-fixes`:**
+  - M7: a per-position, two-way, float64 causality gate. `scripts/toy_fused_audit.py` exits 1 on failure.
+  - The `safe_mask` guard: a safe pair refuses a direct call without writer ends.
+  - Boolean causal masks: the float64 causality bug.
+  - M1: `native_transplant_hook`, with the old hook kept as the `dense_additive` control.
+  - M2: wiring for a routed-source long bridge.
+  - M5: selection seeds separate from reported seeds.
+  - 74 tests pass.
+- **Next, in this order:**
+  1. **M3, attribution controls for the hide ablation.** This is what "via experts" rests on.
+     - A content-only ablation: replace hidden experts' bus vectors with a constant but keep their expert-ID tag, slot and mask.
+     - An ID-only ablation: scramble or zero the `eid` tags but keep the vectors.
+     - Joint hiding of the link-0/1 experts. The 29.1% residual in B←A runs through A expert 0 at links 0/1.
+     - Fine-tune the links briefly with the chosen expert hidden. If accuracy recovers through other experts, the information isn't exclusive to that expert.
+     - Hook point: `FusedPair.forward` hide logic (`blammoe/toy/fused.py`), `Link._bus`. Add the options to `hide_ablation` in `blammoe/toy/fused_train.py` and to `scripts/toy_fused_hide.py`. Each needs a test.
+  2. **M6:** a file-level train/val/test split of `papers/` and the stdlib, applied before tokenizer fitting (`blammoe/toy/corpus.py`, `setup.py`).
+  3. **Small fixes:**
+     - the bootstrap counts 0/0 resamples as accuracy 0 (`blammoe/stats.py:24,37`);
+     - the enrichment-ratio baseline should count only legal entries (`fused.py` `expert_attention_mass`);
+     - report exact 4-digit answer accuracy alongside digit accuracy.
+  4. **Retrain once, then run the sweep (Next steps 2 below).** Include ≥3 seeds for residual vs expert (M8). Every fused checkpoint must pass the audit gate. Re-measure the leaky-run numbers in the docs (M4: depth table, expert-choice shares, stage 2).
+- **Also in the audit doc: expert-tagged buses are sensitive to routing near-ties.** In float32 on GPU, rounding that differs by batch shape flips near-tied top-k choices, and the N(0,1) `eid` embeddings amplify the flip. Keep that in mind when interpreting the hide/ID results.
+
+## This machine (boz-linux)
+
+- **Repo and environment:** `~/BLaMMoE`. The `.venv` was built with pip (torch 2.14.1+cu130).
+- **Disk:** the root disk is ~95% full. `results/toy_poc` is a symlink to `/media/boz/Data/blammoe/results/toy_poc` on the NTFS drive. If that drive is unmounted, run `udisksctl mount -b /dev/nvme0n1p2`. Set `HF_HOME=/media/boz/Data/blammoe/hf_cache` before downloading models.
+- **GPUs:** 2× CMP 170HX, both healthy: ~195 TFLOPS bf16, ~11 fp32, 64 GB each, passed a 60 GB read-back. `42:00` runs at Gen2 ×4 (slow host transfers) and `43:00` at Gen2 ×16. Always set `CUDA_DEVICE_ORDER=PCI_BUS_ID`; then CUDA 1 = `42:00`, 2 = `43:00`, 0 = the 3060 Ti (don't use it). Run one card at a time and tell the owner before each GPU job. There is no P2P, and none is needed: run one job per card.
+- **Test fixture:** for CLI wiring checks without trained checkpoints, copy `configs/toy_poc.yaml` with `out_dir` pointed elsewhere, then run `PYTHONPATH=. python docs/audit-2026-10-19/gate_fixture_build.py <that.yaml>`. It builds untrained models plus live links with gates = 1.
+
+## Where things stood after PR #1 (one paragraph; see the audit for caveats)
 
 At toy scale, two independently trained, frozen MoE language models with different
 tokenizers, widths and expert counts pass information to each other expert-to-expert.
@@ -22,10 +64,10 @@ improves ordinary-text prediction once the leak is closed.
 
 ```bash
 git clone https://github.com/dev-boz/BLaMMoE && cd BLaMMoE
-git checkout claude/new-session-f94vqn
+git checkout audit-fixes   # or main
 uv venv && uv pip install -e ".[dev]"     # CUDA torch on a GPU box; see README for CPU-only
-PYTHONPATH=. .venv/bin/python -m pytest -q   # 64 tests, ~1 min on CPU
-PYTHONPATH=. .venv/bin/python scripts/hw_probe.py   # GPU boxes: run this before anything long
+PYTHONPATH=. .venv/bin/python -m pytest -q   # 74 tests, ~10 s on CPU
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. .venv/bin/python scripts/hw_probe.py   # ONE card at a time (it probes every visible GPU)
 ```
 
 Hardware notes:
