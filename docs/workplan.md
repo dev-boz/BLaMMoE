@@ -51,7 +51,7 @@ pre-residual (spec 1.1).
   asserts `ExpertCapture.output.shape[-1] == hidden_size`.
 - Papers: OLMoE `2409.02060` (arch).
 
-## WP2 — Paired data collection  ·  Runs on: model  ·  Status: open
+## WP2 — Paired data collection  ·  Runs on: model  ·  Status: partial
 
 Build the paired `(h_A, h_B)` activation corpus (spec 1.3).
 
@@ -69,6 +69,22 @@ Build the paired `(h_A, h_B)` activation corpus (spec 1.3).
 - Acceptance: pooling unit tests (boundary discard, window math); a small
   end-to-end collection run producing a paired file whose two halves have equal row
   counts.
+- **`pooling.py` built** (`tests/test_pooling.py`): `pool_char_spans(offsets_a,
+  states_a, offsets_b, states_b, windows, boundary_margin) -> PooledPairs` and the
+  config-driven `pool_document(..., text_len, cfg.pooling)`. Offsets are HF
+  `offset_mapping` spans; zero-width (special) tokens are ignored. **Margin
+  semantics** (the spec wording is ambiguous): each model mean-pools the tokens
+  lying fully inside the window, and the pair is dropped if either model's pooled
+  tokens leave more than `boundary_margin` chars uncovered at either edge.
+  `boundary_margin=0` keeps only windows on boundaries shared by both tokenizers.
+- **Open for `collect.py`:** a forward hook on a routed expert sees only the
+  tokens routed *to that expert* (HF MoE blocks index-select before calling it),
+  so `ExpertCapture.output` is `[n_routed, d]`, not `[T, d]`. Pooling needs a
+  per-token `[T, d]` array: either recover the routed token indices, or apply the
+  expert FFN densely to the layer's MLP input for every token. Decide and document.
+  Also check the installed `transformers` version still exposes experts as a
+  `ModuleList` — some versions fuse them into one module with 3-D weights, which
+  would break `expert_module_template` (WP1 VERIFY).
 - Depends on: WP1.
 
 ## WP3 — Expert selection  ·  Runs on: model  ·  Status: open
@@ -85,7 +101,7 @@ primary criterion is operation-level specialization.
   OLMoE `2409.02060` (domain routing stats).
 - Depends on: WP1.
 
-## WP4 — Alignment fitters  ·  Runs on: any  ·  Status: open
+## WP4 — Alignment fitters  ·  Runs on: any  ·  Status: built
 
 Supervised maps from `H_A` to `H_B` (spec 1.4). Pure NumPy/SciPy.
 
@@ -94,13 +110,21 @@ Supervised maps from `H_A` to `H_B` (spec 1.4). Pure NumPy/SciPy.
 - `blammoe/align/linear.py` — `fit_linear(H_A, H_B, ridge=0.0) -> W` least-squares,
   rectangular (Rung 3), with unconstrained and ridge variants.
 - Common `apply(map, H)` and a `residual(map, H_A, H_B)` helper.
+- **Built** (`tests/test_align.py`). Fitters return a `LinearMap` (W + centering
+  means) from `blammoe/align/base.py`; `residual` is relative (= 1 − R²), so 1.0 is
+  exactly the predict-the-target-mean / Transmission-Illusion baseline — always
+  evaluate it on held-out pairs. `fit_from_config(cfg.align, H_A, H_B)` dispatches
+  on the rung YAML. Extras beyond the contract: `fit_orthogonal(..., scale=True)`
+  (similarity Procrustes, absorbs a global norm gap between checkpoints), and
+  `fit_orthogonal` also accepts `d_A≠d_B` (semi-orthogonal; the Atlas-Alignment
+  setup) as a Rung-3 baseline next to lstsq/ridge.
 - Acceptance: recover a known random orthogonal `R` on synthetic data to ~machine
   precision; ridge shrinks toward zero as λ→∞; rectangular map handles `d_A≠d_B`.
 - Papers: Atlas-Alignment `2510.27413`, "Transferring Features…" `2506.06609`,
   Søgaard `1805.03620` (why supervised over unsupervised here), Platonic-brain
   `2605.20496` (orthogonal works — do **not** default to ridge without evidence).
 
-## WP5 — Metric battery + validate-the-validators  ·  Runs on: any  ·  Status: open
+## WP5 — Metric battery + validate-the-validators  ·  Runs on: any  ·  Status: built
 
 Trust the metrics before trusting them on the real pair (spec 1.3, item 5).
 
@@ -112,9 +136,16 @@ Trust the metrics before trusting them on the real pair (spec 1.3, item 5).
 - Acceptance: on synthetic data, known-good (identity + noise) scores high on all
   three metrics; known-bad (independent random) scores low; CKA-vs-battery
   divergence is demonstrated on an outlier-injected case.
+- **Built** (`tests/test_metrics.py`). `run_battery(H_A, H_B) -> BatteryResult`
+  (linear CKA, mutual k-NN à la Huh et al. 2405.07987, held-out similarity-Procrustes
+  residual on row-L2-normalized states à la Atlas-Alignment); `rung1_gate(good, bad)`
+  passes only if *every* metric separates the pair. Outlier case reproduces Davari
+  Cor. 3: one point moved by 1000 drops CKA 0.9999 → 0.09 while k-NN and residual
+  are unchanged. Gate gaps (0.1 each) are a judgment call — recalibrate on real
+  Rung-1 data.
 - Papers: CKA reliability `2210.16156`, Relative Representations `2209.15430`.
 
-## WP6 — Injection adapter (Tx/Rx + Latent Bus)  ·  Runs on: model  ·  Status: open
+## WP6 — Injection adapter (Tx/Rx + Latent Bus)  ·  Runs on: model  ·  Status: partial
 
 Let the target model *read* the foreign vector (spec 1.1). Hub-and-spoke: one
 Tx/Rx pair per model into a Universal Latent Bus.
@@ -126,6 +157,12 @@ Tx/Rx pair per model into a Universal Latent Bus.
   states is `model`.
 - Acceptance: at zero-init gate the injected contribution is exactly zero (identity
   behavior); shapes compose through Tx→bus→Rx; gate is a learnable scalar/vector.
+- **`blammoe/adapters/gated_xattn.py` built** (`tests/test_adapters.py`): `TxAdapter`
+  (LayerNorm + linear into the bus) and `RxAdapter` (target residual cross-attends
+  over the bus, added through `tanh(gate)`, gate = 0 at init → bit-for-bit
+  identity). Takes a `[B, T_tgt, T_src]` block mask, which is how the toy POC
+  enforces causality across mismatched tokenizers. Trained end-to-end in WP-T;
+  training against real checkpoints is still open.
 - Papers: CALM `2401.02412`, Flamingo `2204.14198`, MoT `2509.21164`, BRIDGE
   `2511.11526`, Zipper `2405.18669`; Symphony-MoE `2509.18542` (interference risk).
 - Depends on: WP1, WP4.
@@ -168,14 +205,62 @@ selection → collection → fit → metric battery → efficacy tests, logging 
 
 ---
 
+## WP-T — Toy proof of concept  ·  Runs on: any  ·  Status: built
+
+The whole Phase-1 question at toy scale, runnable on this CPU box with no
+downloads: two tiny MoE LMs trained from scratch (`blammoe/toy/`), then
+transmission of ONE expert's output from A into B.
+
+- A: char-level, d=128, 8 experts. B: BPE-1024, d=96, 16 finer experts,
+  different seed. (Stands in for Rung 3: tokenizer, width, expert granularity.)
+- Corpus: CPython stdlib (code), `papers/` (prose), synthetic key→value recall.
+- **Blindfold test** (a controlled Test B): B reads the recall prompt with stored
+  values masked, so it cannot know the answer digits (chance 10%); A reads it
+  clean. Any accuracy gain in B must arrive through the translator.
+- Carriers: (1) zero-shot linear transplant — WP4 ridge map A-expert → B-expert
+  fitted on clean pairs, swapped into B's MoE; (2) learned bridge — WP6 Tx/Rx
+  trained on B's LM loss, both models frozen.
+- Controls: shuffled-document A signal, blindfolded A, matched-norm random,
+  wrong-position (Test C, transplant only), plus damage to B's ordinary-text loss.
+- Variants: A's operation-level "answer specialist" expert (most routed at
+  answer positions) vs its least-routed expert, dense vs routed-only expert
+  output, and A's whole residual stream as the CALM/MoT-style baseline.
+- Run: `scripts/toy_train.py configs/toy_poc.yaml model_a|model_b`, then
+  `scripts/toy_poc.py configs/toy_poc.yaml`, then `scripts/toy_followup.py`.
+  Results: `docs/toy-poc-results.md`. **Outcome:** routed-only transplant of A's
+  answer-specialist expert into B's last-layer expert, 8% → 96.5%; learned
+  bridge mid-stack 92.0%; all controls at chance. For the real models, use
+  routed-only expert outputs (dense ones leak the residual stream) and a
+  calibration corpus that covers the transmitted content.
+
+## WP-T2 — Toy lockstep fusion  ·  Runs on: any  ·  Status: built
+
+Both frozen toy models run block by block with bidirectional gated links; the
+translator can choose which partner experts to read (`signal: experts`). Code:
+`blammoe/toy/fused.py`, `blammoe/toy/fused_train.py`, `scripts/toy_fused*.py`. Results
+and the tokenizer-leak audit: `docs/toy-fusion-results.md`. Cross-tokenizer pairs must
+use `safe_mask` (CLAUDE.md rule 7).
+
+## WP-T3 — Stage-2 translator fine-tuning  ·  Runs on: any  ·  Status: built
+
+Reinforce partner-dependent wins (`blammoe/toy/reward.py`,
+`scripts/toy_fused_reward.py`). Results are in `docs/toy-fusion-results.md`; they were
+run under the old (leaky) mask, so rerun under `safe_mask` before relying on them. Open:
+a reward-weight sweep.
+
+## WP-T4 — Review sweep (seeds, CIs, Rung-2, ensemble)  ·  Runs on: GPU  ·  Status: open
+
+Pieces built and tested (`fused_train.py`, `blammoe/stats.py`); runner not written.
+Spec: `docs/HANDOFF.md`, next step 2.
+
 ## Dependency graph
 
 ```
 WP0 ─ built
 WP1 ─(hooks built; loader open)─┬─ WP2 ── WP3
                                 │          │
-WP4 (any) ──────────────────────┼──────────┤
-WP5 (any) ──────────────────────┘          │
+WP4 (built) ────────────────────┼──────────┤
+WP5 (built) ────────────────────┘          │
                                  WP6 ──┬── WP7
                                        ├── WP8 ──┬── WP9
                                        │         └── WP10
@@ -184,9 +269,9 @@ WP5 (any) ──────────────────────┘ 
 
 ## Good first tasks (no GPU, runnable on this box now)
 
-1. **WP4 — alignment fitters.** Self-contained NumPy/SciPy; synthetic acceptance.
-2. **WP5 — metric battery.** Same; validates a load-bearing methodological claim.
-3. **WP2 pooling module only** (`data/pooling.py`) — pure index logic, unit-testable
+1. ~~**WP4 — alignment fitters.**~~ *(built)* Self-contained NumPy/SciPy; synthetic acceptance.
+2. ~~**WP5 — metric battery.**~~ *(built)* Same; validates a load-bearing methodological claim.
+3. ~~**WP2 pooling module only**~~ *(built)* (`data/pooling.py`) — pure index logic, unit-testable
    without any model. Leaves `collect.py` for the model box.
 
 These three unblock the math-heavy core of the pipeline and need nothing but the

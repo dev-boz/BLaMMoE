@@ -26,6 +26,16 @@ catastrophic interference. Read `docs/workplan.md` for the task list and
 6. **One work package per change.** Keep diffs scoped to a single WP so they can
    be reviewed and handed off independently.
 
+7. **Cross-tokenizer fusion must be leak-proof.** When one model reads another's
+   BPE tokens, build the pair with `safe_mask=True` and run it through `run_pair`;
+   confirm with `scripts/toy_fused_audit.py` (full-text scoring must equal
+   prefix-honest scoring). BPE boundaries on the full text depend on later
+   characters, and the ordinary controls (wrong document, wrong position, copy of
+   itself) cannot catch that leak. It has already produced one withdrawn result.
+8. **Expert-level claims use routed-only expert outputs.** An expert evaluated
+   densely on every token reads the whole residual stream through its weights, so
+   even a never-routed expert appears to transmit.
+
 ## Conventions
 
 - Package is `blammoe`; tests live in `tests/`, named `test_<module>.py`.
@@ -46,6 +56,8 @@ PYTHONPATH=. .venv-dev/bin/python -m pytest tests/test_metrics.py -q
 ```
 
 ## Where the truth lives
+
+- Current state, how to reproduce, and next steps: `docs/HANDOFF.md` (start here)
 
 - Experimental design & rationale: `blammoe-spec-and-bibliography-v4.md`
 - Source papers (already downloaded): `papers/` — see `docs/papers-index.md`
