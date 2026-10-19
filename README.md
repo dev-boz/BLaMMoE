@@ -58,8 +58,18 @@ uv venv && uv pip install -e ".[dev]"     # pulls CUDA torch, transformers, data
 
 ## Status
 
-Foundation is in and tested (`pytest` green): config loader, model registry,
-expert-capture hook, alignment fitters (WP4), metric battery + Rung-1 gate (WP5), char-span pooling (WP2), Tx/Rx adapters (WP6), and a toy end-to-end
-proof of concept (WP-T, results in [`docs/toy-poc-results.md`](docs/toy-poc-results.md)).
-Everything else is specified in the work plan and
-intentionally **not** stubbed — pick a work package and build it wired + tested.
+**Start with [`docs/HANDOFF.md`](docs/HANDOFF.md)**: current state, how to reproduce,
+next steps. All work is on branch `claude/new-session-f94vqn`.
+
+Built and tested (`pytest` green, 64 tests): config loader, model registry,
+expert-capture hook, alignment fitters (WP4), metric battery + Rung-1 gate (WP5),
+char-span pooling (WP2), Tx/Rx gated cross-attention adapters (WP6), device selection,
+bootstrap statistics, a hardware probe, and a toy end-to-end programme:
+
+- One-way expert transmission between two different toy MoEs:
+  [`docs/toy-poc-results.md`](docs/toy-poc-results.md).
+- Two-way lockstep fusion with translator-chosen experts, a tokenizer-leak audit and
+  leak-proof results: [`docs/toy-fusion-results.md`](docs/toy-fusion-results.md).
+
+The real-model work packages (WP1 loader, WP2 collection, WP3, WP7-WP11) are specified
+in the work plan and intentionally **not** stubbed.

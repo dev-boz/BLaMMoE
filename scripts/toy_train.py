@@ -8,6 +8,7 @@ from pathlib import Path
 
 import torch
 
+from blammoe.device import pick_device
 from blammoe.toy import setup
 from blammoe.toy.config import ToyPOCConfig
 from blammoe.toy.moe import param_count, save
@@ -22,7 +23,8 @@ def main(cfg_path: str, which: str, threads: int = 2) -> None:
     out = Path(cfg.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     tok = setup.tokenizer(spec, cfg)
-    model = setup.build_model(spec, tok.vocab_size, cfg)
+    device = pick_device()
+    model = setup.build_model(spec, tok.vocab_size, cfg).to(device)
     logf = open(out / f"{which}.log", "w")
 
     def log(msg: str) -> None:
@@ -30,7 +32,7 @@ def main(cfg_path: str, which: str, threads: int = 2) -> None:
         logf.write(msg + "\n")
         logf.flush()
 
-    log(f"{which}: {param_count(model):,} params, vocab {tok.vocab_size}")
+    log(f"{which}: {param_count(model):,} params, vocab {tok.vocab_size}, on {device}")
     hist = train_lm(model, tok, setup.sampler(cfg, seed=spec.seed), steps=cfg.steps,
                     batch_size=cfg.batch_size, lr=cfg.lr,
                     eval_samples=setup.eval_recall_samples(cfg), log=log)

@@ -233,6 +233,26 @@ transmission of ONE expert's output from A into B.
   routed-only expert outputs (dense ones leak the residual stream) and a
   calibration corpus that covers the transmitted content.
 
+## WP-T2 — Toy lockstep fusion  ·  Runs on: any  ·  Status: built
+
+Both frozen toy models run block by block with bidirectional gated links; the
+translator can choose which partner experts to read (`signal: experts`). Code:
+`blammoe/toy/fused.py`, `blammoe/toy/fused_train.py`, `scripts/toy_fused*.py`. Results
+and the tokenizer-leak audit: `docs/toy-fusion-results.md`. Cross-tokenizer pairs must
+use `safe_mask` (CLAUDE.md rule 7).
+
+## WP-T3 — Stage-2 translator fine-tuning  ·  Runs on: any  ·  Status: built
+
+Reinforce partner-dependent wins (`blammoe/toy/reward.py`,
+`scripts/toy_fused_reward.py`). Results are in `docs/toy-fusion-results.md`; they were
+run under the old (leaky) mask, so rerun under `safe_mask` before relying on them. Open:
+a reward-weight sweep.
+
+## WP-T4 — Review sweep (seeds, CIs, Rung-2, ensemble)  ·  Runs on: GPU  ·  Status: open
+
+Pieces built and tested (`fused_train.py`, `blammoe/stats.py`); runner not written.
+Spec: `docs/HANDOFF.md`, next step 2.
+
 ## Dependency graph
 
 ```
