@@ -27,9 +27,12 @@ catastrophic interference. Read `docs/workplan.md` for the task list and
    be reviewed and handed off independently.
 
 7. **Cross-tokenizer fusion must be leak-proof.** When one model reads another's
-   BPE tokens, build the pair with `safe_mask=True` and run it through `run_pair`;
-   confirm with `scripts/toy_fused_audit.py` (full-text scoring must equal
-   prefix-honest scoring). BPE boundaries on the full text depend on later
+   BPE tokens, build the pair with `safe_mask=True` and run it through `run_pair`
+   (a safe pair refuses a direct call without writer ends). Every trained fused
+   checkpoint must pass `scripts/toy_fused_audit.py`: full-text log-probs equal
+   prefix-honest re-runs at EVERY position, both models, in float64 (float32 GPU
+   rounding flips near-tied routing and looks like a leak); it exits nonzero on
+   any mismatch. BPE boundaries on the full text depend on later
    characters, and the ordinary controls (wrong document, wrong position, copy of
    itself) cannot catch that leak. It has already produced one withdrawn result.
 8. **Expert-level claims use routed-only expert outputs.** An expert evaluated

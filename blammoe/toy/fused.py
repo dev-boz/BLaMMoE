@@ -75,7 +75,8 @@ def char_distance_buckets(reader_ends: torch.Tensor, writer_ends: torch.Tensor) 
 
 
 def _causal(T: int, device) -> torch.Tensor:
-    return torch.triu(torch.full((T, T), float("-inf"), device=device), diagonal=1)
+    """True = blocked. Boolean, so it stays causal in fp64/bf16 (a float32 -inf mask does not)."""
+    return torch.ones(T, T, dtype=torch.bool, device=device).triu(1)
 
 
 class Link(nn.Module):
@@ -153,6 +154,8 @@ class FusedPair(nn.Module):
         boundaries are final - otherwise those boundaries leak upcoming chars.
         ``hide_experts``: (A's, B's) expert ids whose bus entries the partner may not read
         (expert-token signal only) - the ablation for "does the chosen expert carry it?"."""
+        if self.safe_mask and (write_ends_a is None or write_ends_b is None):
+            raise ValueError("safe_mask pair needs closed-chunk writer ends: call run_pair, or pass write_ends_*")
         A, B = self.A, self.B
         xa = A.tok(ids_a) + A.pos(torch.arange(ids_a.shape[1], device=ids_a.device))
         xb = B.tok(ids_b) + B.pos(torch.arange(ids_b.shape[1], device=ids_b.device))

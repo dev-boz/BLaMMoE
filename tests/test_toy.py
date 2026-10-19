@@ -2,6 +2,7 @@
 cross-tokenizer alignment, and no-op guarantees of both carriers. All tiny/fast."""
 import random
 
+import pytest
 import torch
 
 from blammoe.hooks import ExpertCapture, expert_path
@@ -261,3 +262,16 @@ def test_hide_experts_blocks_exactly_those_bus_entries():
     assert torch.all(w_ab[..., 1:][(ids_b == 2)[:, None, :].expand_as(w_ab[..., 1:])] == 0)
     assert torch.all(w_ba[..., 1:][(ids_a == 0)[:, None, :].expand_as(w_ba[..., 1:])] == 0)
     assert w_ab[..., 1:][(ids_b != 2)[:, None, :].expand_as(w_ab[..., 1:])].sum() > 0
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.bfloat16])
+def test_model_is_causal_in_every_dtype(dtype):
+    """A float32 -inf attention mask is not applied correctly in float64: the model then reads
+    the future. Position t must give the same logits whether or not later tokens exist."""
+    torch.manual_seed(0)
+    m = ToyMoELM(ToyMoEConfig(vocab_size=50, d_model=16, n_layers=2, n_heads=2, n_experts=4, top_k=2,
+                              d_expert=16, max_len=64)).eval().to(dtype)
+    ids = torch.randint(1, 50, (1, 40))
+    with torch.no_grad():
+        full, pre = m(ids)[0, :20].float(), m(ids[:, :20])[0].float()
+    assert torch.allclose(full, pre, atol=1e-2 if dtype == torch.bfloat16 else 1e-5)
