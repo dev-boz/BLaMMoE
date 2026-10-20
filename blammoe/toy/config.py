@@ -58,6 +58,16 @@ class Stage2Spec:
 
 
 @dataclass
+class HideSpec:
+    """Attribution controls for an expert-bus fusion (audit M3, scripts/toy_fused_hide.py):
+    the recovery fine-tune that retrains the links with the chosen experts hidden."""
+
+    finetune_steps: int = 300  # 0 = skip the fine-tunes
+    finetune_warmup: int = 50  # the links are already trained: a fresh Adam needs warmup
+    lr: float = 2e-3
+
+
+@dataclass
 class ToyPOCConfig:
     out_dir: str = "results/toy_poc"
     seq_chars: int = 256
@@ -70,6 +80,7 @@ class ToyPOCConfig:
     bridge: BridgeSpec = field(default_factory=BridgeSpec)
     fused: FusedSpec = field(default_factory=FusedSpec)
     stage2: Stage2Spec = field(default_factory=Stage2Spec)
+    hide: HideSpec = field(default_factory=HideSpec)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "ToyPOCConfig":

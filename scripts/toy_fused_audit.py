@@ -4,7 +4,8 @@ For each variant, both models' full-text log-probs are compared with prefix-hone
 re-runs (each position sees only the chars it has read; blammoe.toy.audit.causality_gate)
 at EVERY scored position of the evaluation windows the results are reported on: the 96
 split-recall windows (each model its own view) and the 48 ordinary-text windows. Expert
-variants are also checked with experts hidden (the hide-ablation path). Any position
+variants are also checked under the bus ablations the attribution controls use (one expert
+hidden, one blanked, every tag shifted: scripts/toy_fused_hide.py). Any position
 differing by more than ``tol`` fails the variant; the exit code is nonzero if any fails.
 
 The check runs in float64. Causality is an exact property of the masks, but in float32 the
@@ -28,7 +29,7 @@ from blammoe.device import pick_device
 from blammoe.toy import setup
 from blammoe.toy.audit import causality_gate
 from blammoe.toy.config import ToyPOCConfig
-from blammoe.toy.fused import FusedPair
+from blammoe.toy.fused import BusAblation, FusedPair
 from blammoe.toy.fused_train import general_eval_set, split_eval_set
 from blammoe.toy.moe import load
 
@@ -58,7 +59,8 @@ def main(cfg_path: str, threads: int = 4, *variants: str) -> int:
         pair = pair.double().eval()  # see module docstring
         paths = {"normal": {}}
         if pair.signal == "experts":
-            paths["hide_expert_0"] = {"hide_experts": (frozenset({0}), frozenset({0}))}
+            abl = BusAblation(hide=frozenset({0}), blank=frozenset({1}), tags="shift")
+            paths["ablated"] = {"ablate": (abl, abl)}
         report[name] = {}
         for path, kw in paths.items():
             for kind, dd in docs.items():

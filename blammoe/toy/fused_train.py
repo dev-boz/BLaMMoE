@@ -6,6 +6,7 @@ moved to the pair's device.
 """
 from __future__ import annotations
 
+import copy
 import random
 from collections.abc import Callable
 
@@ -14,8 +15,10 @@ import torch
 from blammoe.toy.batching import Batch, make_batch
 from blammoe.toy.corpus import MixedSampler, Sample, split_recall_sample
 from blammoe.toy.fused import (
-    FusedPair, bits_per_char, char_predictions, first_char_matrix, pair_loss, run_pair, subset_accuracy,
+    NO_ABLATION, BusAblation, FusedPair, bits_per_char, char_predictions, first_char_matrix, pair_loss, run_pair,
+    subset_accuracy,
 )
+from blammoe.toy.moe import lr_at
 from blammoe.toy.tokenizers import CharTokenizer
 
 
@@ -45,16 +48,23 @@ def mixed_draw(prose: str, code: str, L: int, p_split: float, seed: int):
 
 def train_fused(
     pair: FusedPair, tok1, tok2, draw: Callable, L: int, *, steps: int, batch_size: int, lr: float,
-    answer_weight: float, log: Callable[[str], None] = print, log_every: int = 100,
+    answer_weight: float, log: Callable[[str], None] = print, log_every: int = 100, warmup: int = 0,
+    **run_kw,
 ) -> list[dict]:
+    """``warmup`` > 0: linear warmup then cosine decay (for links that are already trained:
+    a fresh Adam's first full-size steps knock them off). ``run_kw`` go to every forward,
+    e.g. ``ablate`` to train with an expert hidden."""
     dev = device_of(pair)
     opt = torch.optim.AdamW(pair.bridge_parameters(), lr=lr, weight_decay=0.0)
     history = []
     for step in range(steps):
+        if warmup:
+            for g in opt.param_groups:
+                g["lr"] = lr_at(step, steps, lr, warmup)
         items = draw(batch_size)
         b1 = make_batch([x for x, _ in items], tok1, L, device=dev)
         b2 = make_batch([y for _, y in items], tok2, L, device=dev)
-        l1, l2 = run_pair(pair, b1, b2)
+        l1, l2 = run_pair(pair, b1, b2, **run_kw)
         loss = pair_loss(l1, b1, answer_weight) + pair_loss(l2, b2, answer_weight)
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -167,14 +177,80 @@ def ensemble_baseline(pair: FusedPair, docs, splits, tok1, tok2, L: int) -> dict
     return res
 
 
-def hide_ablation(pair: FusedPair, splits, tok1, tok2, L: int) -> dict:
-    """Hide one partner expert at a time (expert-token signal only)."""
+def _label(experts) -> str:
+    return "+".join(str(e) for e in sorted(experts))
+
+
+def hide_ablation(
+    pair: FusedPair, splits, tok1, tok2, L: int, *, joint_m1: tuple[frozenset[int], ...] = (),
+    joint_m2: tuple[frozenset[int], ...] = (), blank_values: tuple[dict, dict] | None = None,
+) -> dict:
+    """Attribution controls on the expert bus (audit M3), each in ONE direction at a time
+    (model 1's answers that need model 2 are scored with model 2's bus ablated, and vice versa):
+
+    hide_*  : one partner expert at a time made unreadable (the original ablation).
+    blank_* : one partner expert at a time keeps its tag, slot and mask but sends a constant
+              (``blank_values`` = (m1's, m2's) per-link means from ``expert_output_means``;
+              zeros if None). Collapse here = the information is in the expert's OUTPUT.
+    tags_*  : every partner tag zeroed / shifted to the wrong expert, outputs kept.
+              No collapse here = the reader does not need the tag.
+    joint_* : the given partner expert sets hidden together (``joint_m1``: sets of model 1's
+              experts, hidden from model 2)."""
     n1, n2 = pair.A.cfg.n_experts, pair.B.cfg.n_experts
-    out = {"hide_m2_expert_from_m1": {}, "hide_m1_expert_from_m2": {}}
-    for e in range(n2):
-        r = split_scores(pair, splits, tok1, tok2, L, hide_experts=(frozenset(), frozenset({e})))
-        out["hide_m2_expert_from_m1"][e] = r["m1_needs_partner"]["acc"]
-    for e in range(n1):
-        r = split_scores(pair, splits, tok1, tok2, L, hide_experts=(frozenset({e}), frozenset()))
-        out["hide_m1_expert_from_m2"][e] = r["m2_needs_partner"]["acc"]
-    return out
+    bv1, bv2 = blank_values or (None, None)
+
+    def m1_acc(abl_m2: BusAblation) -> float:
+        return split_scores(pair, splits, tok1, tok2, L, ablate=(NO_ABLATION, abl_m2))["m1_needs_partner"]["acc"]
+
+    def m2_acc(abl_m1: BusAblation) -> float:
+        return split_scores(pair, splits, tok1, tok2, L, ablate=(abl_m1, NO_ABLATION))["m2_needs_partner"]["acc"]
+
+    return {
+        "none": {"m1_needs_partner": m1_acc(NO_ABLATION), "m2_needs_partner": m2_acc(NO_ABLATION)},
+        "hide_m2_expert_from_m1": {e: m1_acc(BusAblation(hide=frozenset({e}))) for e in range(n2)},
+        "hide_m1_expert_from_m2": {e: m2_acc(BusAblation(hide=frozenset({e}))) for e in range(n1)},
+        "blank_m2_expert_for_m1": {e: m1_acc(BusAblation(blank=frozenset({e}), blank_value=bv2)) for e in range(n2)},
+        "blank_m1_expert_for_m2": {e: m2_acc(BusAblation(blank=frozenset({e}), blank_value=bv1)) for e in range(n1)},
+        "tags_m2_for_m1": {t: m1_acc(BusAblation(tags=t)) for t in ("zero", "shift")},
+        "tags_m1_for_m2": {t: m2_acc(BusAblation(tags=t)) for t in ("zero", "shift")},
+        "joint_hide_m2_from_m1": {_label(s): m1_acc(BusAblation(hide=frozenset(s))) for s in joint_m2},
+        "joint_hide_m1_from_m2": {_label(s): m2_acc(BusAblation(hide=frozenset(s))) for s in joint_m1},
+    }
+
+
+def recovery_finetune(
+    pair: FusedPair, ablate: tuple[BusAblation, BusAblation], tok1, tok2, draw: Callable, splits, L: int, *,
+    steps: int, batch_size: int, lr: float, answer_weight: float, warmup: int = 100,
+    log: Callable[[str], None] = print,
+) -> tuple[FusedPair, dict]:
+    """Fine-tune a COPY of the pair's links with ``ablate`` in force during training and eval.
+
+    The reader never saw the expert missing in training, so a collapse under hiding may only
+    mean its attention broke. If accuracy recovers here, the information also reaches it
+    through other experts (not exclusive to the hidden one). Run the same with nothing
+    ablated as the control for the fine-tuning itself. Returns (fine-tuned copy, scores)."""
+    ft = copy.deepcopy(pair)
+    before = split_scores(ft, splits, tok1, tok2, L, ablate=ablate)
+    history = train_fused(ft, tok1, tok2, draw, L, steps=steps, batch_size=batch_size, lr=lr,
+                          answer_weight=answer_weight, log=log, warmup=warmup, ablate=ablate)
+    after = split_scores(ft, splits, tok1, tok2, L, ablate=ablate)
+    acc = lambda r: {k: r[k]["acc"] for k in ("m1_needs_partner", "m2_needs_partner")}  # noqa: E731
+    return ft, {"before": acc(before), "after": acc(after), "train": history}
+
+
+def chosen_experts(per_link: dict, direction: str) -> dict:
+    """The partner experts a translator chose to read, from ``toy_fused_experts.py``'s
+    ``split_needs_partner`` section ({link: {direction: {"share": [...]}}}), ``direction``
+    "m1_reads_m2" or "m2_reads_m1". Returns ``main`` (largest attention share summed over
+    links), ``per_link`` top-2 by share, and joint sets: the union of each link's top-1 and of
+    its top-2 (only sets of 2+ experts; single experts are already in the hide sweep)."""
+    share = {int(l): r[direction]["share"] for l, r in per_link.items()}
+    n = len(next(iter(share.values())))
+    top = {l: sorted(range(n), key=lambda e: -s[e])[:2] for l, s in sorted(share.items())}
+    total = [sum(s[e] for s in share.values()) for e in range(n)]
+    joint = []
+    for k in (1, 2):
+        u = frozenset(e for t in top.values() for e in t[:k])
+        if len(u) > 1 and u not in joint:
+            joint.append(u)
+    return {"main": max(range(n), key=lambda e: total[e]), "per_link": top, "joint": joint}

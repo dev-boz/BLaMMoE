@@ -4,9 +4,11 @@ import random
 import torch
 
 from blammoe.toy.corpus import recall_sample, split_recall_sample
-from blammoe.toy.fused import FusedPair
+from blammoe.toy.batching import make_batch
+from blammoe.toy.fused import BusAblation, FusedPair, expert_output_means
 from blammoe.toy.fused_train import (
-    ensemble_baseline, general_bpc, hide_ablation, mixed_draw, split_eval_set, split_scores, train_fused,
+    chosen_experts, ensemble_baseline, general_bpc, hide_ablation, mixed_draw, recovery_finetune, split_eval_set, split_scores,
+    train_fused,
 )
 from blammoe.toy.moe import ToyMoEConfig, ToyMoELM
 from blammoe.toy.tokenizers import BPETokenizer, CharTokenizer
@@ -60,3 +62,70 @@ def test_ensemble_baseline_and_hide_ablation_shapes():
     hid = hide_ablation(pair, splits, ta, tb, L)
     assert len(hid["hide_m2_expert_from_m1"]) == pair.B.cfg.n_experts
     assert len(hid["hide_m1_expert_from_m2"]) == pair.A.cfg.n_experts
+
+
+def test_hide_ablation_attribution_controls():
+    """M3: blank (content gone, tag kept), tag (ids zeroed/shifted, content kept) and joint
+    hiding, each scored in one direction with the other bus untouched."""
+    pair, ta, tb = pair_and_toks()
+    for lk in pair.links.values():
+        with torch.no_grad():
+            lk.rx_a.gate.fill_(1.0)
+            lk.rx_b.gate.fill_(1.0)
+    splits = split_eval_set(L, n=3, seed=6)
+    sel = split_eval_set(L, n=3, seed=8)
+    means = expert_output_means(pair, make_batch([s.view("a") for s in sel], ta, L),
+                                make_batch([s.view("b") for s in sel], tb, L))
+    hid = hide_ablation(pair, splits, ta, tb, L, blank_values=means,
+                        joint_m1=[frozenset({0, 1})], joint_m2=[frozenset({0, 2}), frozenset(range(6))])
+    n1, n2 = pair.A.cfg.n_experts, pair.B.cfg.n_experts
+    assert len(hid["blank_m2_expert_for_m1"]) == n2 and len(hid["blank_m1_expert_for_m2"]) == n1
+    assert set(hid["tags_m2_for_m1"]) == {"zero", "shift"} == set(hid["tags_m1_for_m2"])
+    assert set(hid["joint_hide_m2_from_m1"]) == {"0+2", "0+1+2+3+4+5"} and set(hid["joint_hide_m1_from_m2"]) == {"0+1"}
+    # every partner expert hidden: model 1 reads only the null slot, so which partner it has
+    # cannot matter (not the same as links off: the null read still adds the attention biases)
+    wrong = split_scores(pair, splits, ta, tb, L, partner_roll=1,
+                         ablate=(BusAblation(), BusAblation(hide=frozenset(range(6)))))
+    assert hid["joint_hide_m2_from_m1"]["0+1+2+3+4+5"] == wrong["m1_needs_partner"]["acc"]
+    # each control is scored in one direction: the m1 numbers match a run with only m2's bus ablated
+    one = split_scores(pair, splits, ta, tb, L, ablate=(BusAblation(), BusAblation(tags="shift")))
+    assert hid["tags_m2_for_m1"]["shift"] == one["m1_needs_partner"]["acc"]
+    for k in ("blank_m2_expert_for_m1", "tags_m1_for_m2", "joint_hide_m1_from_m2"):
+        assert all(0 <= v <= 1 for v in hid[k].values())
+
+
+def test_recovery_finetune_trains_a_copy_under_the_ablation():
+    pair, ta, tb = pair_and_toks()
+    before = {k: v.clone() for k, v in pair.links.state_dict().items()}
+    splits = split_eval_set(L, n=3, seed=5)
+    abl = (BusAblation(hide=frozenset({1})), BusAblation(hide=frozenset({2})))
+    seen = []
+    orig = FusedPair.forward
+
+    def spy(self, *a, **kw):
+        seen.append(kw.get("ablate"))
+        return orig(self, *a, **kw)
+
+    FusedPair.forward = spy
+    try:
+        ft, r = recovery_finetune(pair, abl, ta, tb, mixed_draw(PROSE, CODE, L, 0.5, seed=1), splits, L,
+                                  steps=3, batch_size=2, lr=1e-2, answer_weight=1.0, warmup=2, log=lambda m: None)
+    finally:
+        FusedPair.forward = orig
+    assert seen and all(s == abl for s in seen)  # every train AND eval forward had the expert hidden
+    assert all(torch.equal(v, pair.links.state_dict()[k]) for k, v in before.items())  # original untouched
+    assert any(not torch.equal(v, ft.links.state_dict()[k]) for k, v in before.items())
+    assert set(r) == {"before", "after", "train"} and 0 <= r["after"]["m1_needs_partner"] <= 1
+
+
+def test_chosen_experts_reads_the_selection_set_attention_shares():
+    # B<-A pattern from the audit: expert 0 at links 0/1, expert 5 at the last links
+    shares = {"0": [0.6, 0.1, 0.1, 0.0, 0.0, 0.2], "1": [0.5, 0.0, 0.3, 0.0, 0.0, 0.2],
+              "2": [0.1, 0.0, 0.0, 0.1, 0.0, 0.8], "3": [0.0, 0.0, 0.0, 0.2, 0.1, 0.7]}
+    per_link = {l: {"m2_reads_m1": {"share": s}, "m1_reads_m2": {"share": [1.0] + [0.0] * 5}} for l, s in shares.items()}
+    c = chosen_experts(per_link, "m2_reads_m1")
+    assert c["main"] == 5  # 0.2+0.2+0.8+0.7 beats expert 0's 1.2
+    assert c["per_link"] == {0: [0, 5], 1: [0, 2], 2: [5, 0], 3: [5, 3]}
+    assert c["joint"] == [frozenset({0, 5}), frozenset({0, 2, 3, 5})]
+    one = chosen_experts(per_link, "m1_reads_m2")
+    assert one["main"] == 0 and one["joint"] == [frozenset({0, 1})]  # top-1 everywhere is e0: no 1-set

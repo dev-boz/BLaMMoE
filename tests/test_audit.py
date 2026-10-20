@@ -7,7 +7,7 @@ import torch
 from blammoe.toy.audit import causality_gate, full_text_a_nll, honest_a_nll, prefix_inputs
 from blammoe.toy.batching import make_batch
 from blammoe.toy.corpus import Sample, recall_sample, split_recall_sample
-from blammoe.toy.fused import FusedPair, closed_token_ends, run_pair, token_ends
+from blammoe.toy.fused import BusAblation, FusedPair, closed_token_ends, run_pair, token_ends
 from blammoe.toy.moe import ToyMoEConfig, ToyMoELM
 from blammoe.toy.tokenizers import BPETokenizer, CharTokenizer
 
@@ -133,7 +133,8 @@ def test_safe_pair_refuses_a_direct_call_without_writer_ends():
 def test_causality_gate_passes_safe_pairs_in_both_directions(signal):
     ta, tb = CharTokenizer(), bpe()
     pair = live_pair(ta, tb, signal, safe_mask=True)
-    kw = {"hide_experts": (frozenset({0}), frozenset({1}))} if signal == "experts" else {}
+    kw = {"ablate": (BusAblation(hide=frozenset({0}), blank=frozenset({1}), tags="shift"),
+                     BusAblation(hide=frozenset({1}), blank=frozenset({0}), tags="zero"))} if signal == "experts" else {}
     r = causality_gate(pair, gate_docs(), ta, tb, 128, **kw)
     assert r["ok"], r
     assert r["a"]["n_positions"] > 200 and r["b"]["n_positions"] > 50

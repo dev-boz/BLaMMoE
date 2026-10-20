@@ -155,7 +155,7 @@ def test_train_bridge_moves_gate_and_keeps_models_frozen():
 
 # --------------------------------------------------------------------------- WP-T2 fused pair
 from blammoe.toy.corpus import split_recall_sample  # noqa: E402
-from blammoe.toy.fused import FusedPair, read_mask, subset_accuracy, token_ends  # noqa: E402
+from blammoe.toy.fused import BusAblation, FusedPair, read_mask, subset_accuracy, token_ends  # noqa: E402
 
 
 def test_split_recall_masks_each_value_in_exactly_one_view():
@@ -295,12 +295,101 @@ def test_hide_experts_blocks_exactly_those_bus_entries():
             lk.rx_b.gate.fill_(1.0)
     attn = {}
     with torch.no_grad():
-        pair(b1.ids, b2.ids, token_ends(b1), token_ends(b2), attn=attn, hide_experts=(frozenset({0}), frozenset({2})))
+        pair(b1.ids, b2.ids, token_ends(b1), token_ends(b2), attn=attn,
+             ablate=(BusAblation(hide=frozenset({0})), BusAblation(hide=frozenset({2}))))
     w_ab, ids_b = attn[0]["a_reads_b"], attn[0]["b_expert_ids"].flatten(1)
     w_ba, ids_a = attn[0]["b_reads_a"], attn[0]["a_expert_ids"].flatten(1)
     assert torch.all(w_ab[..., 1:][(ids_b == 2)[:, None, :].expand_as(w_ab[..., 1:])] == 0)
     assert torch.all(w_ba[..., 1:][(ids_a == 0)[:, None, :].expand_as(w_ba[..., 1:])] == 0)
     assert w_ab[..., 1:][(ids_b != 2)[:, None, :].expand_as(w_ab[..., 1:])].sum() > 0
+
+
+def test_bus_ablation_apply_blanks_content_and_hides_entries():
+    torch.manual_seed(0)
+    idx = torch.tensor([[[0, 1], [2, 0]]])  # 1 doc, 2 positions, k=2 -> bus [0, 1, 2, 0]
+    slots = torch.randn(1, 2, 2, 3)
+    mask = torch.zeros(1, 4, 5, dtype=torch.bool)
+    value = {7: torch.arange(9.0).reshape(3, 3)}  # per-expert constants at layer 7
+    s, m = BusAblation(blank=frozenset({0}), blank_value=value).apply(7, slots, idx, mask)
+    assert torch.equal(s[0, 0, 0], value[7][0]) and torch.equal(s[0, 1, 1], value[7][0])
+    assert torch.equal(s[0, 0, 1], slots[0, 0, 1]) and torch.equal(s[0, 1, 0], slots[0, 1, 0])
+    assert torch.equal(m, mask)  # blanked entries stay readable
+    s, m = BusAblation(blank=frozenset({2})).apply(7, slots, idx, mask)
+    assert torch.equal(s[0, 1, 0], torch.zeros(3))  # no values given -> zeros
+    s, m = BusAblation(hide=frozenset({0})).apply(7, slots, idx, mask)
+    assert torch.equal(s, slots)
+    assert m[0, :, 1].all() and m[0, :, 4].all() and not m[0, :, [0, 2, 3]].any()  # col 0 = null slot
+
+
+def live_one_link_pair():
+    """Experts pair exchanging at link 0 only, gates open: A's logits depend on B solely
+    through B's layer-0 bus (B's layer-0 routing reads B's input, not its experts)."""
+    _, b1, b2, _ = fused_setup("experts")
+    _, ta, tb, A, B = setup_pair()
+    pair = FusedPair(A, B, [0], d_bus=8, n_heads=2, signal="experts")
+    with torch.no_grad():
+        for lk in pair.links.values():
+            lk.rx_a.gate.fill_(1.0)
+            lk.rx_b.gate.fill_(1.0)
+    run = lambda abl: pair(b1.ids, b2.ids, token_ends(b1), token_ends(b2), ablate=(BusAblation(), abl))[0]  # noqa: E731
+    return pair, run
+
+
+def test_blanking_every_expert_removes_the_partners_content_but_not_its_tags():
+    pair, run = live_one_link_pair()
+    all_b = frozenset(range(pair.B.cfg.n_experts))
+    with torch.no_grad():
+        keep, blank = run(BusAblation()), run(BusAblation(blank=all_b))
+        for ex in pair.B.layers[0].moe.experts:  # change what B's experts SAY, not who fires
+            ex.w2.weight.mul_(0.5)
+        assert not torch.allclose(run(BusAblation()), keep, atol=1e-4)
+        assert torch.allclose(run(BusAblation(blank=all_b)), blank, atol=1e-6)
+        pair.links["0"].eid_b.weight.add_(1.0)  # ...but the tags still reach A
+        assert not torch.allclose(run(BusAblation(blank=all_b)), blank, atol=1e-4)
+
+
+def test_tag_ablations_zero_or_shift_the_expert_ids():
+    pair, run = live_one_link_pair()
+    eid = pair.links["0"].eid_b
+    with torch.no_grad():
+        zero, shift = run(BusAblation(tags="zero")), run(BusAblation(tags="shift"))
+        eid.weight.add_(torch.randn_like(eid.weight))
+        assert torch.allclose(run(BusAblation(tags="zero")), zero, atol=1e-6)  # tags gone
+        assert not torch.allclose(run(BusAblation(tags="shift")), shift, atol=1e-4)
+        # shift tags expert e as e+1: the same as keeping tags with the table rolled by one
+        shifted = run(BusAblation(tags="shift"))
+        eid.weight.copy_(eid.weight.roll(-1, 0))
+        assert torch.allclose(run(BusAblation()), shifted, atol=1e-6)
+    with pytest.raises(ValueError):
+        BusAblation(tags="scramble")
+
+
+def test_bus_ablations_refuse_non_expert_signals():
+    _, b1, b2, pair = fused_setup("moe")
+    with pytest.raises(ValueError):
+        pair(b1.ids, b2.ids, token_ends(b1), token_ends(b2), ablate=(BusAblation(hide=frozenset({0})), BusAblation()))
+
+
+def test_expert_output_means_average_routed_outputs_over_real_positions():
+    from blammoe.toy.fused import NEVER, expert_output_means
+
+    _, b1, b2, pair = fused_setup("experts")
+    means_a, means_b = expert_output_means(pair, b1, b2)
+    attn = {}
+    with torch.no_grad():
+        pair(b1.ids, b2.ids, token_ends(b1), token_ends(b2), attn=attn)
+    assert (token_ends(b2) == NEVER).any()  # the BPE views differ in length: padding to skip
+    for side, means, batch, n in (("a", means_a, b1, pair.A.cfg.n_experts), ("b", means_b, b2, pair.B.cfg.n_experts)):
+        assert sorted(means) == [0, 1]
+        real = token_ends(batch) != NEVER
+        for l, m in means.items():
+            out, ids = attn[l][f"{side}_expert_out"], attn[l][f"{side}_expert_ids"]
+            assert m.shape == (n, out.shape[-1])
+            for e in range(n):
+                rows = [out[i, t, j] for i, t in real.nonzero().tolist() for j in range(ids.shape[-1])
+                        if ids[i, t, j] == e]
+                want = torch.stack(rows).mean(0) if rows else torch.zeros(out.shape[-1])
+                assert torch.allclose(m[e], want, atol=1e-6)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64, torch.bfloat16])

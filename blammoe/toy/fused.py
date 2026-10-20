@@ -23,6 +23,7 @@ anything (and no softmax row is ever empty).
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
 
 import torch
 import torch.nn as nn
@@ -98,20 +99,65 @@ class Link(nn.Module):
         self.eid_b = nn.Embedding(n_exp_b, d_bus) if n_exp_b else None
 
     @staticmethod
-    def _bus(tx: TxAdapter, h: torch.Tensor, eid: nn.Embedding | None, idx: torch.Tensor | None):
+    def _bus(tx: TxAdapter, h: torch.Tensor, eid: nn.Embedding | None, idx: torch.Tensor | None,
+             tags: str = "keep"):
         z = tx(h)  # [B, T, d_bus] or, for expert tokens, [B, T, k, d_bus]
         if idx is not None:
-            z = (z + eid(idx)).flatten(1, 2)  # position-major: (t0,slot0), (t0,slot1), ...
+            if tags == "shift":  # every entry tagged as the wrong expert
+                idx = (idx + 1) % eid.num_embeddings
+            if tags != "zero":
+                z = z + eid(idx)
+            z = z.flatten(1, 2)  # position-major: (t0,slot0), (t0,slot1), ...
         return torch.cat([torch.zeros_like(z[:, :1]), z], dim=1)  # prepend null slot
 
     def forward(self, xa, xb, sa, sb, mask_a, mask_b, ia=None, ib=None, want_weights=False,
-                rel_a=None, rel_b=None):
-        ra = self.rx_a(xa, self._bus(self.tx_b, sb, self.eid_b, ib), mask_a, want_weights, rel_a)
-        rb = self.rx_b(xb, self._bus(self.tx_a, sa, self.eid_a, ia), mask_b, want_weights, rel_b)
+                rel_a=None, rel_b=None, tags_a="keep", tags_b="keep"):
+        ra = self.rx_a(xa, self._bus(self.tx_b, sb, self.eid_b, ib, tags_b), mask_a, want_weights, rel_a)
+        rb = self.rx_b(xb, self._bus(self.tx_a, sa, self.eid_a, ia, tags_a), mask_b, want_weights, rel_b)
         return ra, rb
 
 
 SIGNALS = ("moe", "resid", "experts")
+TAGS = ("keep", "zero", "shift")
+
+
+@dataclass(frozen=True)
+class BusAblation:
+    """Attribution controls on one model's expert bus, as its partner reads it (signal
+    "experts" only; audit M3). Applied at every link.
+
+    ``hide``: these experts' entries are masked out, so the reader cannot attend to them.
+    ``blank``: these experts' entries keep their slot, mask and expert-ID tag, but the expert's
+    output is replaced by a constant: ``blank_value[layer][e]`` (e.g. its mean output on a
+    selection set, see ``expert_output_means``), zeros if not given. Content-only ablation.
+    ``tags``: "zero" drops every entry's expert-ID tag, "shift" tags expert e as e+1 (mod E);
+    the outputs are untouched. ID-only ablation.
+    """
+    hide: frozenset[int] = frozenset()
+    blank: frozenset[int] = frozenset()
+    tags: str = "keep"
+    blank_value: dict[int, torch.Tensor] | None = field(default=None, compare=False)
+
+    def __post_init__(self):
+        if self.tags not in TAGS:
+            raise ValueError(self.tags)
+
+    def apply(self, layer: int, slots: torch.Tensor, idx: torch.Tensor, mask: torch.Tensor):
+        """slots [B, T, k, d], idx [B, T, k], reader mask [B, T_r, 1 + T*k] -> (slots, mask)."""
+        if self.blank:
+            on = torch.isin(idx, torch.tensor(sorted(self.blank), device=idx.device))[..., None]
+            if self.blank_value is None:
+                const = torch.zeros_like(slots)
+            else:
+                const = self.blank_value[layer].to(slots)[idx]
+            slots = torch.where(on, const, slots)
+        if self.hide:
+            gone = torch.isin(idx.flatten(1), torch.tensor(sorted(self.hide), device=idx.device))
+            mask = mask | torch.cat([torch.zeros_like(gone[:, :1]), gone], 1)[:, None, :]
+        return slots, mask
+
+
+NO_ABLATION = BusAblation()
 
 
 class FusedPair(nn.Module):
@@ -143,17 +189,18 @@ class FusedPair(nn.Module):
         self, ids_a: torch.Tensor, ids_b: torch.Tensor, ends_a: torch.Tensor, ends_b: torch.Tensor,
         *, disabled: frozenset[int] = frozenset(), partner_roll: int = 0, attn: dict | None = None,
         write_ends_a: torch.Tensor | None = None, write_ends_b: torch.Tensor | None = None,
-        hide_experts: tuple[frozenset[int], frozenset[int]] = (frozenset(), frozenset()),
+        ablate: tuple[BusAblation, BusAblation] = (NO_ABLATION, NO_ABLATION),
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """``disabled``: link depths switched off. ``partner_roll``: each model hears the
         partner of a *different* document in the batch (shuffled-partner control).
         ``attn``: if a dict is given, filled with {layer: (A-reads-B, B-reads-A)} attention
-        [B, T_reader, 1 + S] (column 0 = null slot) plus the expert ids on the bus.
+        [B, T_reader, 1 + S] (column 0 = null slot) plus the expert ids and outputs on the bus
+        (true ids and unablated outputs, before any ``ablate``).
         ``write_ends_*``: when each position may be READ by the partner (default: its own
         ends). Pass ``closed_token_ends`` to stop a partner reading a BPE token before its
         boundaries are final - otherwise those boundaries leak upcoming chars.
-        ``hide_experts``: (A's, B's) expert ids whose bus entries the partner may not read
-        (expert-token signal only) - the ablation for "does the chosen expert carry it?"."""
+        ``ablate``: (A's, B's) ``BusAblation`` - what the partner may read of each model's
+        expert bus (expert-token signal only): the controls for "does the chosen expert carry it?"."""
         if self.safe_mask and (write_ends_a is None or write_ends_b is None):
             raise ValueError("safe_mask pair needs closed-chunk writer ends: call run_pair, or pass write_ends_*")
         A, B = self.A, self.B
@@ -163,6 +210,8 @@ class FusedPair(nn.Module):
         wa = (ends_a if write_ends_a is None else write_ends_a).roll(partner_roll, 0)  # partner as writer
         wb = (ends_b if write_ends_b is None else write_ends_b).roll(partner_roll, 0)
         experts = self.signal == "experts"
+        if not experts and ablate != (NO_ABLATION, NO_ABLATION):
+            raise ValueError("bus ablations need signal='experts'")
         if experts:
             wa, wb = wa.repeat_interleave(A.cfg.top_k, 1), wb.repeat_interleave(B.cfg.top_k, 1)
         mask_a, mask_b = read_mask(ends_a, wb), read_mask(ends_b, wa)
@@ -186,26 +235,26 @@ class FusedPair(nn.Module):
             ia = ib = None
             la_mask, lb_mask = mask_a, mask_b
             if experts:
-                sa, sb = blk_a.moe.last_slots, blk_b.moe.last_slots
+                sa, sb = blk_a.moe.last_slots.roll(partner_roll, 0), blk_b.moe.last_slots.roll(partner_roll, 0)
                 ia, ib = blk_a.moe.last_idx.roll(partner_roll, 0), blk_b.moe.last_idx.roll(partner_roll, 0)
-                hid_a, hid_b = hide_experts
-                if hid_b:  # A may not read these B experts
-                    gone = torch.isin(ib.flatten(1), torch.tensor(sorted(hid_b), device=ib.device))
-                    la_mask = mask_a | torch.cat([torch.zeros_like(gone[:, :1]), gone], 1)[:, None, :]
-                if hid_a:
-                    gone = torch.isin(ia.flatten(1), torch.tensor(sorted(hid_a), device=ia.device))
-                    lb_mask = mask_b | torch.cat([torch.zeros_like(gone[:, :1]), gone], 1)[:, None, :]
+                raw = (sa, sb)
+                abl_a, abl_b = ablate
+                sa, lb_mask = abl_a.apply(l, sa, ia, mask_b)  # what B may read of A
+                sb, la_mask = abl_b.apply(l, sb, ib, mask_a)  # what A may read of B
             elif self.signal == "moe":
-                sa, sb = cap["a"], cap["b"]
+                sa, sb = cap["a"].roll(partner_roll, 0), cap["b"].roll(partner_roll, 0)
             else:
-                sa, sb = xa, xb
+                sa, sb = xa.roll(partner_roll, 0), xb.roll(partner_roll, 0)
             ra, rb = self.links[str(l)](
-                xa, xb, sa.roll(partner_roll, 0), sb.roll(partner_roll, 0), la_mask, lb_mask, ia, ib,
+                xa, xb, sa, sb, la_mask, lb_mask, ia, ib,
                 want_weights=attn is not None, rel_a=rel_a, rel_b=rel_b,
+                tags_a=ablate[0].tags, tags_b=ablate[1].tags,
             )
             if attn is not None:
                 (xa, w_ab), (xb, w_ba) = ra, rb
                 attn[l] = {"a_reads_b": w_ab, "b_reads_a": w_ba, "b_expert_ids": ib, "a_expert_ids": ia}
+                if experts:
+                    attn[l]["a_expert_out"], attn[l]["b_expert_out"] = raw
             else:
                 xa, xb = ra, rb
         return A.head(A.ln_f(xa)), B.head(B.ln_f(xb))
@@ -347,3 +396,23 @@ def expert_attention_mass(weights: torch.Tensor, expert_ids: torch.Tensor, n_exp
     share = mass / mass.sum().clamp_min(1e-12)
     return {"null_share": float(w[:, 0].sum() / total), "share": share.tolist(),
             "presence": presence.tolist(), "ratio": (share / presence.clamp_min(1e-12)).tolist()}
+
+
+@torch.no_grad()
+def expert_output_means(pair: FusedPair, batch_a: Batch, batch_b: Batch) -> tuple[dict, dict]:
+    """(A's, B's) {link: [E, d_model]}: each expert's mean routed output over the real (non-pad)
+    positions of a batch, run fused with nothing ablated. Experts never routed there get zeros.
+    Use as ``BusAblation.blank_value``; compute it on a selection set, not the reported one,
+    so the constant carries nothing about the documents being scored."""
+    attn: dict = {}
+    run_pair(pair, batch_a, batch_b, attn=attn)
+    means: tuple[dict, dict] = ({}, {})
+    for side, (batch, n) in enumerate(((batch_a, pair.A.cfg.n_experts), (batch_b, pair.B.cfg.n_experts))):
+        real = token_ends(batch) != NEVER
+        s = "ab"[side]
+        for l, a in attn.items():
+            out, ids = a[f"{s}_expert_out"][real], a[f"{s}_expert_ids"][real]  # [N, k, d], [N, k]
+            onehot = F.one_hot(ids, n).to(out)  # [N, k, E]
+            total = torch.einsum("nkd,nke->ed", out, onehot)
+            means[side][l] = total / onehot.sum((0, 1)).clamp_min(1)[:, None]
+    return means

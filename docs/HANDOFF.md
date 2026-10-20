@@ -24,20 +24,19 @@ in `docs/audit-2026-10-19/`.
   - M1: `native_transplant_hook`, with the old hook kept as the `dense_additive` control.
   - M2: wiring for a routed-source long bridge.
   - M5: selection seeds separate from reported seeds.
-  - 74 tests pass.
+  - M3: attribution controls (details below).
+  - 82 tests pass.
+- **M3 is built** (wiring run on the untrained fixture). See the M3 row in the audit status table. Results need trained checkpoints, so they arrive with the retrain (step 3 below). Run `scripts/toy_fused_experts.py` before `scripts/toy_fused_hide.py`: the hide script takes its chosen experts and blank constants from the seed-2026 selection set.
+  - How to read it: if **blank** collapses like **hide**, the information is in the expert's output, not its tag or slot. If **tags zero/shift** costs little, the reader doesn't rely on the tag. If **joint** hiding takes B←A from 29.1% to about chance, the residual was link 0/1. If **recovery fine-tune** brings accuracy back, the information also reaches the partner through other experts, so it isn't exclusive to the chosen ones; compare against the `none` arm.
+  - `hide` (all experts) is **not** the same as links off: a reader left with only the null slot still gets the attention biases. Use `disabled=` for "solo".
+  - `docs/audit-2026-10-19/codex_audit_checks.py` still uses the old `hide_experts=` keyword. It is an archived probe, so it was left as is.
 - **Next, in this order:**
-  1. **M3, attribution controls for the hide ablation.** This is what "via experts" rests on.
-     - A content-only ablation: replace hidden experts' bus vectors with a constant but keep their expert-ID tag, slot and mask.
-     - An ID-only ablation: scramble or zero the `eid` tags but keep the vectors.
-     - Joint hiding of the link-0/1 experts. The 29.1% residual in B←A runs through A expert 0 at links 0/1.
-     - Fine-tune the links briefly with the chosen expert hidden. If accuracy recovers through other experts, the information isn't exclusive to that expert.
-     - Hook point: `FusedPair.forward` hide logic (`blammoe/toy/fused.py`), `Link._bus`. Add the options to `hide_ablation` in `blammoe/toy/fused_train.py` and to `scripts/toy_fused_hide.py`. Each needs a test.
-  2. **M6:** a file-level train/val/test split of `papers/` and the stdlib, applied before tokenizer fitting (`blammoe/toy/corpus.py`, `setup.py`).
-  3. **Small fixes:**
+  1. **M6:** a file-level train/val/test split of `papers/` and the stdlib, applied before tokenizer fitting (`blammoe/toy/corpus.py`, `setup.py`).
+  2. **Small fixes:**
      - the bootstrap counts 0/0 resamples as accuracy 0 (`blammoe/stats.py:24,37`);
      - the enrichment-ratio baseline should count only legal entries (`fused.py` `expert_attention_mass`);
      - report exact 4-digit answer accuracy alongside digit accuracy.
-  4. **Retrain once, then run the sweep (Next steps 2 below).** Include ≥3 seeds for residual vs expert (M8). Every fused checkpoint must pass the audit gate. Re-measure the leaky-run numbers in the docs (M4: depth table, expert-choice shares, stage 2).
+  3. **Retrain once, then run the sweep (Next steps 2 below).** Include ≥3 seeds for residual vs expert (M8). Every fused checkpoint must pass the audit gate. Re-measure the leaky-run numbers in the docs (M4: depth table, expert-choice shares, stage 2).
 - **Also in the audit doc: expert-tagged buses are sensitive to routing near-ties.** In float32 on GPU, rounding that differs by batch shape flips near-tied top-k choices, and the N(0,1) `eid` embeddings amplify the flip. Keep that in mind when interpreting the hide/ID results.
 
 ## This machine (boz-linux)
@@ -66,7 +65,7 @@ improves ordinary-text prediction once the leak is closed.
 git clone https://github.com/dev-boz/BLaMMoE && cd BLaMMoE
 git checkout audit-fixes   # or main
 uv venv && uv pip install -e ".[dev]"     # CUDA torch on a GPU box; see README for CPU-only
-PYTHONPATH=. .venv/bin/python -m pytest -q   # 74 tests, ~10 s on CPU
+PYTHONPATH=. .venv/bin/python -m pytest -q   # 82 tests, ~10 s on CPU
 CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. .venv/bin/python scripts/hw_probe.py   # ONE card at a time (it probes every visible GPU)
 ```
 
@@ -101,7 +100,7 @@ python scripts/toy_followup.py configs/toy_poc.yaml 4 3000
 # 3. Leak-proof two-way fusion: expert-level vs residual-level (~1.5-2 h each on CPU)
 python scripts/toy_fused.py configs/toy_poc.yaml ab_experts_all_rel_safe 2
 python scripts/toy_fused.py configs/toy_poc.yaml ab_resid_all_rel_safe 2
-# 4. Which experts were chosen, single-expert ablation, causality audit
+# 4. Which experts were chosen (selection set), attribution controls + recovery fine-tunes, causality audit
 python scripts/toy_fused_experts.py configs/toy_poc.yaml ab_experts_all_rel_safe 4
 python scripts/toy_fused_hide.py configs/toy_poc.yaml ab_experts_all_rel_safe 4
 python scripts/toy_fused_audit.py configs/toy_poc.yaml 4 16 ab_experts_all_rel_safe ab_resid_all_rel_safe
