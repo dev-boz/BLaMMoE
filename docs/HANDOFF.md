@@ -38,7 +38,7 @@ in `docs/audit-2026-10-19/`.
   - **Every old checkpoint is pre-M6.** The models, BPE and fused links in `results/toy_poc` were fitted on what is now val/test text. The BPE cache is now `bpe1024_train_v0.1_t0.1.json`, so the old `bpe1024.json` is ignored, but old `model_*.pt` / `fused_*.pt` files would still load. Retrain from pretraining ("Reproduce", step 1) before reporting anything.
 - **Small fixes done** (2026-10-20). Split-recall scores now carry `exact` (all 4 digits right, over `n_answers`) beside digit `acc`; report both. Enrichment `ratio` uses a `baseline` key (was `presence`) over legal entries only, so old `_experts.json` ratios are not comparable.
 - **Next:**
-  1. **Retrain once, then run the sweep (Next steps 2 below).** Include ≥3 seeds for residual vs expert (M8). Every fused checkpoint must pass the audit gate. Re-measure the leaky-run numbers in the docs (M4: depth table, expert-choice shares, stage 2).
+  1. **Retrain once by running the sweep** (`scripts/toy_sweep.py`, Next steps 2 below; the runner is built). It retrains from pretraining. Include ≥3 seeds for residual vs expert (M8). Every fused checkpoint must pass the audit gate. Re-measure the leaky-run numbers in the docs (M4: depth table, expert-choice shares, stage 2).
 - **Also in the audit doc: expert-tagged buses are sensitive to routing near-ties.** In float32 on GPU, rounding that differs by batch shape flips near-tied top-k choices, and the N(0,1) `eid` embeddings amplify the flip. Keep that in mind when interpreting the hide/ID results.
 
 ## This machine (boz-linux)
@@ -144,18 +144,29 @@ the write-ups.
 1. **Independent adversarial audit** of the eval path before any scale-up. Use a fresh
    session with no stake in the results, told to *find leaks and eval bugs*, not to
    confirm. Cheaper to catch at 3M params than at 7B. (External-review recommendation.)
-2. **Review sweep on GPU** (the external review's asks). The pieces are built and
-   tested; the runner is not written yet:
-   - `blammoe/toy/fused_train.py`: `train_fused`, `split_scores(per_doc=True)`,
-     `general_bpc`, `ensemble_baseline` (no-communication mixture of the two solo
-     models), `hide_ablation`.
-   - `blammoe/stats.py`: pooled-accuracy bootstrap CIs over documents,
-     `paired_bootstrap_diff`, `seed_summary`.
-   - To build: `scripts/toy_sweep.py` + `configs/toy_sweep.yaml`. Pretrain 3 seeds each of
-     A and B (`ToyModelSpec.seed`); for each seed pair train `experts_safe` and
-     `resid_safe`; run the hide ablation and ensemble baseline; and add a **Rung-2
-     partner** (same architecture, different seed, e.g. B↔B′). Make it resumable (skip a
-     job whose output exists), and report bootstrap CIs plus mean ± sd across seeds.
+2. **Review sweep on GPU** (the external review's asks). **Runner built (2026-10-20):**
+   `scripts/toy_sweep.py configs/toy_sweep.yaml [threads] [unit ...]`, helpers and summary in
+   `blammoe/toy/sweep.py`.
+   - **Units.** Each unit is a full toy_poc-style run in `results/toy_sweep/<unit>/` (a symlink
+     to the Data drive), so the single-run scripts work on it unchanged. Main units `s0..s2`
+     pair A_i with B_i, with seeds (0,1), (2,3), (4,5). `s0` uses the toy_poc seeds. Rung-2
+     units `r0..r2` pair B_{i+1} (as `model_a`) with B_i, copying the main units' B models,
+     so they need no extra pretraining.
+   - **Per unit:** pretrain, then `toy_fused.py` for each variant (experts_safe and resid_safe).
+     Then the float64 audit gate on all variants; a failure is recorded and the sweep exits 1.
+     Then `toy_fused_experts.py` + `toy_fused_hide.py` for each experts variant, then the
+     ensemble baseline. A job is skipped if its output already exists, so rerunning resumes.
+     A unit's config is written to `<unit>/config.yaml`; a rerun with a changed config stops.
+   - **`summary.json`:** per unit and variant, bootstrap CIs over documents for digit and exact
+     accuracy, fused minus shuffled partner, experts minus residual (paired: same seed-2025
+     documents), the gate, and attribution (chosen expert hidden or blanked, worst other
+     expert, tags, joint, recovery fine-tunes). Across seeds: mean, sd, min and max per kind.
+   - **Splitting the units:** pass unit names, e.g. `s0 s1 r0` and `s2 r1 r2`. Run the two
+     halves on both cards at once only if the owner agrees; the default is one card at a time.
+     The r-units need their B models from the s-units first. One summary run at the end
+     (with no unit jobs left) collects everything.
+   - `toy_fused.py` now saves per-document rows (`per_doc`) for fused, shuffled-partner and
+     solo, which the CIs need.
 3. **Data-difference dose-response:** train B on progressively different data from A
    (shifted code/prose mix → disjoint files → no code) and watch transfer fall off. This
    tests how much survives different labs' data. Needs a file-subset option in

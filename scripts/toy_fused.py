@@ -63,14 +63,15 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
     split_eval = lambda **kw: split_scores(pair, splits, t1, t2, L, **kw)  # noqa: E731
     gen_eval = lambda **kw: general_bpc(pair, gen, t1, t2, L, **kw)  # noqa: E731
     res = {"variant": variant, "spec": v, "bridge_params": n_params, "train": history,
-           "split": {"fused": split_eval(), "shuffled_partner": split_eval(partner_roll=1),
-                     "solo": split_eval(disabled=all_links)},
+           "split": {"fused": split_eval(per_doc=True), "shuffled_partner": split_eval(partner_roll=1, per_doc=True),
+                     "solo": split_eval(disabled=all_links, per_doc=True)},  # per_doc: bootstrap CIs (toy_sweep)
            "general": {"fused": gen_eval(), "shuffled_partner": gen_eval(partner_roll=1),
                        "solo": gen_eval(disabled=all_links)}}
     if len(all_links) > 1:
         res["split"]["only_link"] = {l: split_eval(disabled=all_links - {l}) for l in sorted(all_links)}
         res["split"]["without_link"] = {l: split_eval(disabled=frozenset({l})) for l in sorted(all_links)}
-    fmt = lambda r: " ".join(f"{n}={x['acc']:.3f} (exact {x['exact']:.3f})" for n, x in r.items())  # noqa: E731
+    fmt = lambda r: " ".join(f"{n}={x['acc']:.3f} (exact {x['exact']:.3f})"  # noqa: E731
+                             for n, x in r.items() if n != "per_doc")
     for k, r in res["split"].items():
         if k in ("only_link", "without_link"):
             for l, rr in r.items():

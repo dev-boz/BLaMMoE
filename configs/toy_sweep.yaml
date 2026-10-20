@@ -1,0 +1,10 @@
+# Seed sweep (HANDOFF next step 2, audit M8): scripts/toy_sweep.py. Every unit is a full
+# toy_poc-style run in <out_dir>/<unit>; model, fusion and hide settings come from `base`.
+base: configs/toy_poc.yaml
+out_dir: results/toy_sweep       # on this box a symlink to the Data drive (see HANDOFF)
+seeds: [[0, 1], [2, 3], [4, 5]]  # (A seed, B seed) per main unit s0..s2; s0 = the toy_poc seeds
+variants: [ab_experts_all_rel_safe, ab_resid_all_rel_safe]   # expert- vs residual-level, both leak-proof
+rung2: true                      # r_i: B_{i+1} <-> B_i, same architecture, different seed
+rung2_variants: [ab_experts_all_rel_safe, ab_resid_all_rel_safe]
+hide: true                       # attribution controls + recovery fine-tunes on every experts variant
+overrides: {}                    # deep-merged into base, e.g. {steps: 3} for a smoke run
