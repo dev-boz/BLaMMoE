@@ -11,7 +11,14 @@ are a bonus. Mixing e.g. a Qwen with a Mistral and getting a *worse* result stil
 success. So prioritise work that makes "information transfers, and it travels via experts"
 airtight over ordinary-text quality.
 
-## START HERE: audit fixes in progress
+## START HERE: run the sweep
+
+**All audit fixes needed before retraining are in, and the sweep runner is built and
+smoke-tested (`faeaddf`). The next step is the GPU run: follow `docs/SWEEP-RUNSHEET.md`** (preflight,
+the exact command, what to watch, resume, and a prompt for the session after). The owner
+starts it in person, so don't launch GPU jobs without them.
+
+## Audit fixes (background)
 
 A 3-model adversarial audit (Claude, Codex GPT-6.1-Sol, Gemini 3.8 Flash) is merged in
 `docs/audit-2026-10-19.md`, with the status table at the top. Raw reports and probes are
@@ -27,7 +34,8 @@ in `docs/audit-2026-10-19/`.
   - M3: attribution controls (details below).
   - M6: a train / val / test split of `papers/` and the stdlib by file, with each stdlib package kept whole (details below).
   - The small fixes: bootstrap 0/0 resamples, the enrichment baseline (legal entries only) and exact 4-digit answer accuracy. See the "Minors" row in the audit status table.
-  - 90 tests pass.
+  - The sweep runner (`scripts/toy_sweep.py`, see Next steps 2).
+  - 93 tests pass.
 - **M3 is built** (wiring run on the untrained fixture). See the M3 row in the audit status table. Results need trained checkpoints, so they arrive with the retrain (step 2 below). Run `scripts/toy_fused_experts.py` before `scripts/toy_fused_hide.py`: the hide script takes its chosen experts and blank constants from the seed-2026 selection set.
   - How to read it: if **blank** collapses like **hide**, the information is in the expert's output, not its tag or slot. If **tags zero/shift** costs little, the reader doesn't rely on the tag. If **joint** hiding takes B←A from 29.1% to about chance, the residual was link 0/1. If **recovery fine-tune** brings accuracy back, the information also reaches the partner through other experts, so it isn't exclusive to the chosen ones; compare against the `none` arm.
   - `hide` (all experts) is **not** the same as links off: a reader left with only the null slot still gets the attention biases. Use `disabled=` for "solo".
@@ -67,7 +75,7 @@ improves ordinary-text prediction once the leak is closed.
 git clone https://github.com/dev-boz/BLaMMoE && cd BLaMMoE
 git checkout audit-fixes   # or main
 uv venv && uv pip install -e ".[dev]"     # CUDA torch on a GPU box; see README for CPU-only
-PYTHONPATH=. .venv/bin/python -m pytest -q   # 90 tests, ~13 s on CPU
+PYTHONPATH=. .venv/bin/python -m pytest -q   # 93 tests, ~13 s on CPU
 CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. .venv/bin/python scripts/hw_probe.py   # ONE card at a time (it probes every visible GPU)
 ```
 
