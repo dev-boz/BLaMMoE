@@ -104,7 +104,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
     }
     for k, r in res["general"].items():
         log(f"general {k}: " + " ".join(f"{n}={x:.4f}" for n, x in r.items()))
-    log("split fused: " + " ".join(f"{n}={x['acc']:.3f}" for n, x in res["split_fused"].items()))
+    log("split fused: " + " ".join(f"{n}={x['acc']:.3f} (exact {x['exact']:.3f})" for n, x in res["split_fused"].items()))
     (out / f"fused_{variant}.json").write_text(json.dumps(res, indent=1, default=str))
     torch.save(pair.links.state_dict(), out / f"fused_{variant}.pt")
     log("done")

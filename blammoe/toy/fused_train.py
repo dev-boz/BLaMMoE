@@ -86,7 +86,9 @@ def split_eval_set(L: int, n: int = 96, seed: int = 2025):
 
 def split_scores(pair: FusedPair, splits, tok1, tok2, L: int, per_doc: bool = False, **kw) -> dict:
     """Accuracy on answers each model needs its partner for / can read itself.
-    ``per_doc``: also return per-document (correct, total) for bootstrapping."""
+    Each entry has digit accuracy (``acc``) and exact whole-answer accuracy (``exact``).
+    ``per_doc``: also return per-document (correct, total) digits, and the same for whole
+    answers under ``*_exact``, for bootstrapping."""
     dev = device_of(pair)
     s1 = make_batch([s.view("a") for s in splits], tok1, L, device=dev)
     s2 = make_batch([s.view("b") for s in splits], tok2, L, device=dev)
@@ -99,19 +101,20 @@ def split_scores(pair: FusedPair, splits, tok1, tok2, L: int, per_doc: bool = Fa
         "m2_own": subset_accuracy(o2, s2, [s.own_answers("b") for s in splits]),
     }
     if per_doc:
-        out["per_doc"] = {
-            "m1_needs_partner": _per_doc(o1, s1, [s.partner_answers("a") for s in splits]),
-            "m2_needs_partner": _per_doc(o2, s2, [s.partner_answers("b") for s in splits]),
-        }
+        out["per_doc"] = {}
+        for k, (o, b, w) in {"m1_needs_partner": (o1, s1, "a"), "m2_needs_partner": (o2, s2, "b")}.items():
+            out["per_doc"][k], out["per_doc"][f"{k}_exact"] = _per_doc(o, b, [s.partner_answers(w) for s in splits])
     return out
 
 
-def _per_doc(logits: torch.Tensor, batch: Batch, chars) -> list[list[int]]:
-    rows = []
+def _per_doc(logits: torch.Tensor, batch: Batch, chars) -> tuple[list[list[int]], list[list[int]]]:
+    """-> per-document [correct, total] for digits, and for whole answers."""
+    digits, answers = [], []
     for i, c in enumerate(chars):
         r = subset_accuracy(logits[i : i + 1], _row(batch, i), [c])
-        rows.append([round(r["acc"] * r["n"]) if r["n"] else 0, r["n"]])
-    return rows
+        digits.append([round(r["acc"] * r["n"]) if r["n"] else 0, r["n"]])
+        answers.append([round(r["exact"] * r["n_answers"]) if r["n_answers"] else 0, r["n_answers"]])
+    return digits, answers
 
 
 def _row(batch: Batch, i: int) -> Batch:

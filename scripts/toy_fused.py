@@ -70,12 +70,13 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
     if len(all_links) > 1:
         res["split"]["only_link"] = {l: split_eval(disabled=all_links - {l}) for l in sorted(all_links)}
         res["split"]["without_link"] = {l: split_eval(disabled=frozenset({l})) for l in sorted(all_links)}
+    fmt = lambda r: " ".join(f"{n}={x['acc']:.3f} (exact {x['exact']:.3f})" for n, x in r.items())  # noqa: E731
     for k, r in res["split"].items():
         if k in ("only_link", "without_link"):
             for l, rr in r.items():
-                log(f"split {k} {l}: " + " ".join(f"{n}={x['acc']:.3f}" for n, x in rr.items()))
+                log(f"split {k} {l}: {fmt(rr)}")
         else:
-            log(f"split {k}: " + " ".join(f"{n}={x['acc']:.3f}" for n, x in r.items()))
+            log(f"split {k}: {fmt(r)}")
     for k, r in res["general"].items():
         log(f"general {k}: " + " ".join(f"{n}={x:.4f}" for n, x in r.items()))
     (out / f"fused_{variant}.json").write_text(json.dumps(res, indent=1, default=str))

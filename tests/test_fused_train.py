@@ -3,7 +3,7 @@ import random
 
 import torch
 
-from blammoe.toy.corpus import recall_sample, split_recall_sample
+from blammoe.toy.corpus import Sample, recall_sample, split_recall_sample
 from blammoe.toy.batching import make_batch
 from blammoe.toy.fused import BusAblation, FusedPair, expert_output_means
 from blammoe.toy.fused_train import (
@@ -44,6 +44,8 @@ def test_train_fused_opens_gates_and_evals_are_well_formed():
     per = r["per_doc"]["m1_needs_partner"]
     assert len(per) == 3 and sum(t for _, t in per) == r["m1_needs_partner"]["n"]
     assert sum(c for c, _ in per) == round(r["m1_needs_partner"]["acc"] * r["m1_needs_partner"]["n"])
+    ex = r["per_doc"]["m1_needs_partner_exact"]
+    assert sum(t for _, t in ex) == r["m1_needs_partner"]["n_answers"]
     docs = [split_recall_sample(random.Random(9), L).view("a")]
     bpc = general_bpc(pair, docs, ta, tb, L)
     assert bpc["m1_bpc"] > 0 and bpc["m2_bpc"] > 0
@@ -129,3 +131,27 @@ def test_chosen_experts_reads_the_selection_set_attention_shares():
     assert c["joint"] == [frozenset({0, 5}), frozenset({0, 2, 3, 5})]
     one = chosen_experts(per_link, "m1_reads_m2")
     assert one["main"] == 0 and one["joint"] == [frozenset({0, 1})]  # top-1 everywhere is e0: no 1-set
+
+
+def test_exact_answer_accuracy_needs_every_digit_of_an_answer():
+    """Two 4-digit answers; one digit wrong in the first -> digits 7/8 but answers 1/2."""
+    from blammoe.toy.batching import answer_runs
+    from blammoe.toy.bridge import score_answers
+    from blammoe.toy.fused import subset_accuracy
+
+    assert answer_runs([12, 3, 4, 5, 6, 10, 11, 13]) == [[3, 4, 5, 6], [10, 11, 12, 13]]
+    tok = CharTokenizer()
+    text = "store: ab=1234, cd=5678; ask: ab=1234, cd=5678\n"
+    s0 = text.index("ask: ab=") + len("ask: ab=")
+    s1 = text.index(", cd=", s0) + len(", cd=")
+    chars = tuple(range(s0, s0 + 4)) + tuple(range(s1, s1 + 4))
+    b = make_batch([Sample(text=text, blind=text, answer_chars=chars)], tok, len(text))
+    logits = torch.full((*b.targets.shape, tok.vocab_size), -1e4)
+    logits.scatter_(-1, b.targets.clamp_min(0)[..., None], 0.0)  # predict every target...
+    wrong = b.answer_pos[0][1]
+    logits[0, wrong] = 0.0
+    logits[0, wrong, (b.targets[0, wrong] + 1) % tok.vocab_size] = 1.0  # ...except one digit of answer 1
+    r = subset_accuracy(logits, b, [chars])
+    assert (r["n"], r["acc"], r["n_answers"], r["exact"]) == (8, 7 / 8, 2, 0.5)
+    s = score_answers(logits, b)
+    assert (s["n"], s["acc"], s["n_answers"], s["exact"]) == (8, 7 / 8, 2, 0.5)

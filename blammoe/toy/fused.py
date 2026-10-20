@@ -30,7 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from blammoe.adapters import RxAdapter, TxAdapter
-from blammoe.toy.batching import Batch, answer_positions
+from blammoe.toy.batching import Batch, answer_positions, answer_runs
 from blammoe.toy.moe import ToyMoELM
 
 NEVER = 10**9  # end-char for padding: unreadable as a writer
@@ -194,8 +194,9 @@ class FusedPair(nn.Module):
         """``disabled``: link depths switched off. ``partner_roll``: each model hears the
         partner of a *different* document in the batch (shuffled-partner control).
         ``attn``: if a dict is given, filled with {layer: (A-reads-B, B-reads-A)} attention
-        [B, T_reader, 1 + S] (column 0 = null slot) plus the expert ids and outputs on the bus
-        (true ids and unablated outputs, before any ``ablate``).
+        [B, T_reader, 1 + S] (column 0 = null slot), the read masks used (``*_blocked``, True =
+        blocked, after any ``ablate``), plus the expert ids and outputs on the bus (true ids and
+        unablated outputs, before any ``ablate``).
         ``write_ends_*``: when each position may be READ by the partner (default: its own
         ends). Pass ``closed_token_ends`` to stop a partner reading a BPE token before its
         boundaries are final - otherwise those boundaries leak upcoming chars.
@@ -252,7 +253,8 @@ class FusedPair(nn.Module):
             )
             if attn is not None:
                 (xa, w_ab), (xb, w_ba) = ra, rb
-                attn[l] = {"a_reads_b": w_ab, "b_reads_a": w_ba, "b_expert_ids": ib, "a_expert_ids": ia}
+                attn[l] = {"a_reads_b": w_ab, "b_reads_a": w_ba, "b_expert_ids": ib, "a_expert_ids": ia,
+                           "a_reads_b_blocked": la_mask, "b_reads_a_blocked": lb_mask}
                 if experts:
                     attn[l]["a_expert_out"], attn[l]["b_expert_out"] = raw
             else:
@@ -283,17 +285,24 @@ def pair_loss(logits: torch.Tensor, batch: Batch, answer_weight: float = 0.0) ->
 
 @torch.no_grad()
 def subset_accuracy(logits: torch.Tensor, batch: Batch, chars_per_sample: list[tuple[int, ...]]) -> dict:
-    """Top-1 accuracy on the answer tokens whose char is in each sample's given set."""
-    rows, cols = [], []
+    """Teacher-forced top-1 accuracy on the answer tokens whose char is in each sample's given set:
+    per digit (``acc`` over ``n`` digits) and per whole answer (``exact``: all its digits right,
+    over ``n_answers``). An answer only counts for ``exact`` if every one of its digits is scored."""
+    rows, cols, groups = [], [], []
     for i, (full, chars) in enumerate(zip(batch.full_offsets, chars_per_sample)):
-        for p in answer_positions(full, chars):
-            rows.append(i)
-            cols.append(p)
+        for run in answer_runs(chars):
+            pos = answer_positions(full, run)
+            if len(pos) == len(run):
+                groups.append(range(len(rows), len(rows) + len(pos)))
+            rows += [i] * len(pos)
+            cols += pos
     if not rows:
-        return {"acc": float("nan"), "n": 0}
+        return {"acc": float("nan"), "n": 0, "exact": float("nan"), "n_answers": 0}
     r, c = torch.tensor(rows), torch.tensor(cols)
-    pred = logits[r, c].argmax(-1)
-    return {"acc": float((pred == batch.targets[r, c]).float().mean()), "n": len(rows)}
+    ok = (logits[r, c].argmax(-1) == batch.targets[r, c]).tolist()
+    exact = [all(ok[j] for j in g) for g in groups]
+    return {"acc": sum(ok) / len(ok), "n": len(rows),
+            "exact": sum(exact) / len(exact) if exact else float("nan"), "n_answers": len(exact)}
 
 
 @torch.no_grad()
@@ -378,24 +387,30 @@ def diversity(solo: dict, fused: dict, partner_solo: dict, texts: list[str], cha
 
 @torch.no_grad()
 def expert_attention_mass(weights: torch.Tensor, expert_ids: torch.Tensor, n_experts: int,
-                          reader_mask: torch.Tensor) -> dict:
+                          reader_mask: torch.Tensor, blocked: torch.Tensor) -> dict:
     """Which partner experts did the reader choose to read?
 
     weights: [B, T_r, 1 + T_w*k] attention (col 0 = null slot); expert_ids: [B, T_w, k];
-    reader_mask: [B, T_r] bool, the reader positions to aggregate over.
-    Returns the null-slot share, each expert's share of attention mass, each expert's
-    share of the bus entries (presence), and their ratio (>1 = sought out).
+    reader_mask: [B, T_r] bool, the reader positions to aggregate over; blocked: [B, T_r, 1 + T_w*k]
+    the read mask the weights were computed under (True = blocked; ``attn[l]["*_blocked"]``).
+    Returns the null-slot share, each expert's share of attention mass, its baseline share
+    and their ratio (>1 = sought out). The baseline is the share each expert would get if every
+    reader spread its bus mass uniformly over the entries it may legally read (not future, not
+    padding, not hidden), so uniform attention gives a ratio of exactly 1.
     """
     w = weights[reader_mask]  # [N, 1 + S]
+    legal = (~blocked[reader_mask][:, 1:]).float()  # [N, S]
     ids = expert_ids.flatten(1)  # [B, S]
     ids_r = ids[:, None, :].expand(-1, reader_mask.shape[1], -1)[reader_mask]  # [N, S]
     onehot = torch.nn.functional.one_hot(ids_r, n_experts).float()  # [N, S, E]
     mass = torch.einsum("ns,nse->e", w[:, 1:], onehot)
     total = w.sum()
-    presence = torch.nn.functional.one_hot(ids, n_experts).float().mean((0, 1))
     share = mass / mass.sum().clamp_min(1e-12)
+    uniform = legal / legal.sum(1, keepdim=True).clamp_min(1)  # [N, S]
+    base = torch.einsum("n,ns,nse->e", w[:, 1:].sum(1), uniform, onehot)
+    base = base / base.sum().clamp_min(1e-12)
     return {"null_share": float(w[:, 0].sum() / total), "share": share.tolist(),
-            "presence": presence.tolist(), "ratio": (share / presence.clamp_min(1e-12)).tolist()}
+            "baseline": base.tolist(), "ratio": (share / base.clamp_min(1e-12)).tolist()}
 
 
 @torch.no_grad()

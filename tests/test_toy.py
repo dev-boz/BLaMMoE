@@ -280,11 +280,25 @@ def test_expert_attention_mass_attributes_attention_to_expert_ids():
     w[0, 0, 0] = 1.0  # reader 0 reads only the null slot
     w[0, 1, 3] = 1.0  # reader 1 reads bus entry 2 -> expert 2
     w[0, 2, 2], w[0, 2, 4] = 0.5, 0.5  # reader 2 reads expert 1 twice
-    r = expert_attention_mass(w, ids, 3, torch.tensor([[True, True, True]]))
+    open_ = torch.zeros(1, 3, 5, dtype=torch.bool)
+    r = expert_attention_mass(w, ids, 3, torch.tensor([[True, True, True]]), open_)
     assert abs(r["null_share"] - 1 / 3) < 1e-6
     assert [round(x, 3) for x in r["share"]] == [0.0, 0.5, 0.5]
-    assert [round(x, 3) for x in r["presence"]] == [0.25, 0.5, 0.25]
+    assert [round(x, 3) for x in r["baseline"]] == [0.25, 0.5, 0.25]
     assert [round(x, 3) for x in r["ratio"]] == [0.0, 1.0, 2.0]
+
+
+def test_expert_attention_mass_baseline_counts_only_legal_entries():
+    """Blocked entries (future, padding, hidden) must not enter the baseline: a reader that
+    attends uniformly over what it may read is at ratio 1 for every expert it can see."""
+    from blammoe.toy.fused import expert_attention_mass
+
+    ids = torch.tensor([[[0, 1], [2, 2]]])  # bus [0,1,2,2]; reader may read only position 0
+    blocked = torch.tensor([[[False, False, False, True, True]]])
+    w = torch.tensor([[[0.0, 0.5, 0.5, 0.0, 0.0]]])
+    r = expert_attention_mass(w, ids, 3, torch.tensor([[True]]), blocked)
+    assert [round(x, 3) for x in r["baseline"]] == [0.5, 0.5, 0.0]  # was [0.25, 0.25, 0.5]
+    assert [round(x, 3) for x in r["ratio"][:2]] == [1.0, 1.0]
 
 
 def test_hide_experts_blocks_exactly_those_bus_entries():

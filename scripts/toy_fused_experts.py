@@ -1,7 +1,7 @@
 """WP-T2: which partner experts did each translator choose to read?
 
 For a trained expert-token fused pair, report per link and direction the
-attention share on each partner expert vs its share of the bus (ratio > 1 =
+attention share on each partner expert vs its share of the legally readable bus (ratio > 1 =
 sought out), at (a) split-recall answer positions that need the partner and
 (b) all positions of ordinary text. The split windows come from their own seed (2026), so the
 "chosen" expert is identified on documents the hide ablation never scores. Writes <out_dir>/fused_<variant>_experts.json.
@@ -68,8 +68,10 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
         res[name] = {}
         for l, a in attn.items():
             res[name][l] = {
-                "m1_reads_m2": expert_attention_mass(a["a_reads_b"], a["b_expert_ids"], m2.cfg.n_experts, r1),
-                "m2_reads_m1": expert_attention_mass(a["b_reads_a"], a["a_expert_ids"], m1.cfg.n_experts, r2),
+                "m1_reads_m2": expert_attention_mass(a["a_reads_b"], a["b_expert_ids"], m2.cfg.n_experts, r1,
+                                                     a["a_reads_b_blocked"]),
+                "m2_reads_m1": expert_attention_mass(a["b_reads_a"], a["a_expert_ids"], m1.cfg.n_experts, r2,
+                                                     a["b_reads_a_blocked"]),
             }
             for d, r in res[name][l].items():
                 top = sorted(range(len(r["ratio"])), key=lambda e: -r["share"][e])[:3]

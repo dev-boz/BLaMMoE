@@ -26,7 +26,8 @@ in `docs/audit-2026-10-19/`.
   - M5: selection seeds separate from reported seeds.
   - M3: attribution controls (details below).
   - M6: a train / val / test split of `papers/` and the stdlib by file, with each stdlib package kept whole (details below).
-  - 87 tests pass.
+  - The small fixes: bootstrap 0/0 resamples, the enrichment baseline (legal entries only) and exact 4-digit answer accuracy. See the "Minors" row in the audit status table.
+  - 90 tests pass.
 - **M3 is built** (wiring run on the untrained fixture). See the M3 row in the audit status table. Results need trained checkpoints, so they arrive with the retrain (step 2 below). Run `scripts/toy_fused_experts.py` before `scripts/toy_fused_hide.py`: the hide script takes its chosen experts and blank constants from the seed-2026 selection set.
   - How to read it: if **blank** collapses like **hide**, the information is in the expert's output, not its tag or slot. If **tags zero/shift** costs little, the reader doesn't rely on the tag. If **joint** hiding takes B←A from 29.1% to about chance, the residual was link 0/1. If **recovery fine-tune** brings accuracy back, the information also reaches the partner through other experts, so it isn't exclusive to the chosen ones; compare against the `none` arm.
   - `hide` (all experts) is **not** the same as links off: a reader left with only the null slot still gets the attention biases. Use `disabled=` for "solo".
@@ -35,12 +36,9 @@ in `docs/audit-2026-10-19/`.
   - **Rule:** anything fitted or trained (BPE, pretraining, bridges, links, linear fits) reads `setup.texts(cfg, "train")`, selection reads `"val"`, reported ordinary-text numbers read `"test"`. `setup.sampler(cfg, split, seed)` has no default split. Split-recall and recall samples are synthetic and stay seed-separated.
   - **Packages, not just files.** The scoped design split per file. That left ~5% of held-out windows verbatim in train, because `encodings/cp*.py` repeat whole codec tables. Hashing the top-level package name instead cut it to ~0.2% (val) / ~0.8% (test) of windows. What remains is copied license headers and copied code, and the test allows at most 2%. Splits: train 2.1M prose + 6.0M code chars (capped), val 0.25M + 0.97M, test 0.29M + 0.79M.
   - **Every old checkpoint is pre-M6.** The models, BPE and fused links in `results/toy_poc` were fitted on what is now val/test text. The BPE cache is now `bpe1024_train_v0.1_t0.1.json`, so the old `bpe1024.json` is ignored, but old `model_*.pt` / `fused_*.pt` files would still load. Retrain from pretraining ("Reproduce", step 1) before reporting anything.
-- **Next, in this order:**
-  1. **Small fixes:**
-     - the bootstrap counts 0/0 resamples as accuracy 0 (`blammoe/stats.py:24,37`);
-     - the enrichment-ratio baseline should count only legal entries (`fused.py` `expert_attention_mass`);
-     - report exact 4-digit answer accuracy alongside digit accuracy.
-  2. **Retrain once, then run the sweep (Next steps 2 below).** Include ≥3 seeds for residual vs expert (M8). Every fused checkpoint must pass the audit gate. Re-measure the leaky-run numbers in the docs (M4: depth table, expert-choice shares, stage 2).
+- **Small fixes done** (2026-10-20). Split-recall scores now carry `exact` (all 4 digits right, over `n_answers`) beside digit `acc`; report both. Enrichment `ratio` uses a `baseline` key (was `presence`) over legal entries only, so old `_experts.json` ratios are not comparable.
+- **Next:**
+  1. **Retrain once, then run the sweep (Next steps 2 below).** Include ≥3 seeds for residual vs expert (M8). Every fused checkpoint must pass the audit gate. Re-measure the leaky-run numbers in the docs (M4: depth table, expert-choice shares, stage 2).
 - **Also in the audit doc: expert-tagged buses are sensitive to routing near-ties.** In float32 on GPU, rounding that differs by batch shape flips near-tied top-k choices, and the N(0,1) `eid` embeddings amplify the flip. Keep that in mind when interpreting the hide/ID results.
 
 ## This machine (boz-linux)
@@ -69,7 +67,7 @@ improves ordinary-text prediction once the leak is closed.
 git clone https://github.com/dev-boz/BLaMMoE && cd BLaMMoE
 git checkout audit-fixes   # or main
 uv venv && uv pip install -e ".[dev]"     # CUDA torch on a GPU box; see README for CPU-only
-PYTHONPATH=. .venv/bin/python -m pytest -q   # 82 tests, ~10 s on CPU
+PYTHONPATH=. .venv/bin/python -m pytest -q   # 90 tests, ~13 s on CPU
 CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. .venv/bin/python scripts/hw_probe.py   # ONE card at a time (it probes every visible GPU)
 ```
 
