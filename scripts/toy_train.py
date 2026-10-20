@@ -33,7 +33,7 @@ def main(cfg_path: str, which: str, threads: int = 2) -> None:
         logf.flush()
 
     log(f"{which}: {param_count(model):,} params, vocab {tok.vocab_size}, on {device}")
-    hist = train_lm(model, tok, setup.sampler(cfg, seed=spec.seed), steps=cfg.steps,
+    hist = train_lm(model, tok, setup.sampler(cfg, "train", seed=spec.seed), steps=cfg.steps,
                     batch_size=cfg.batch_size, lr=cfg.lr,
                     eval_samples=setup.eval_recall_samples(cfg), log=log)
     save(model, out / f"{which}.pt", history=hist)

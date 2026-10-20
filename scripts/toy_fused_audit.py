@@ -45,9 +45,8 @@ def main(cfg_path: str, threads: int = 4, *variants: str) -> int:
     tok_a, tok_b = setup.tokenizer(cfg.model_a, cfg), setup.tokenizer(cfg.model_b, cfg)
     A, _ = load(out / "model_a.pt", device)
     B, _ = load(out / "model_b.pt", device)
-    base = setup.sampler(cfg, seed=0)
     docs = {"split": [(s.view_a, s.view_b) for s in split_eval_set(L)],
-            "general": [(d.text, d.text) for d in general_eval_set(base.prose, base.code, L)]}
+            "general": [(d.text, d.text) for d in general_eval_set(*setup.texts(cfg, "test"), L)]}
     report, failed = {}, []
     for name in variants or DEFAULT:
         v = fs.variants[name]

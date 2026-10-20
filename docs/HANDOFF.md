@@ -1,8 +1,8 @@
-# Handoff — BLaMMoE, state as of 2026-10-19 (evening)
+# Handoff — BLaMMoE, state as of 2026-10-20
 
 For whoever picks this up next, human or agent. Read `CLAUDE.md` first (working agreement).
 `main` has the toy programme (PR #1 merged). Audit fixes are in progress on local branch
-**`audit-fixes`** (not yet committed or pushed: check `git status`).
+**`audit-fixes`** (committed locally, not pushed).
 
 ## Project goal (from the owner)
 
@@ -25,26 +25,22 @@ in `docs/audit-2026-10-19/`.
   - M2: wiring for a routed-source long bridge.
   - M5: selection seeds separate from reported seeds.
   - M3: attribution controls (details below).
-  - 82 tests pass.
-- **M3 is built** (wiring run on the untrained fixture). See the M3 row in the audit status table. Results need trained checkpoints, so they arrive with the retrain (step 3 below). Run `scripts/toy_fused_experts.py` before `scripts/toy_fused_hide.py`: the hide script takes its chosen experts and blank constants from the seed-2026 selection set.
+  - M6: a train / val / test split of `papers/` and the stdlib by file, with each stdlib package kept whole (details below).
+  - 87 tests pass.
+- **M3 is built** (wiring run on the untrained fixture). See the M3 row in the audit status table. Results need trained checkpoints, so they arrive with the retrain (step 2 below). Run `scripts/toy_fused_experts.py` before `scripts/toy_fused_hide.py`: the hide script takes its chosen experts and blank constants from the seed-2026 selection set.
   - How to read it: if **blank** collapses like **hide**, the information is in the expert's output, not its tag or slot. If **tags zero/shift** costs little, the reader doesn't rely on the tag. If **joint** hiding takes B←A from 29.1% to about chance, the residual was link 0/1. If **recovery fine-tune** brings accuracy back, the information also reaches the partner through other experts, so it isn't exclusive to the chosen ones; compare against the `none` arm.
   - `hide` (all experts) is **not** the same as links off: a reader left with only the null slot still gets the attention biases. Use `disabled=` for "solo".
   - `docs/audit-2026-10-19/codex_audit_checks.py` still uses the old `hide_experts=` keyword. It is an archived probe, so it was left as is.
+- **M6 is done** (2026-10-20). See the M6 row in the audit status table.
+  - **Rule:** anything fitted or trained (BPE, pretraining, bridges, links, linear fits) reads `setup.texts(cfg, "train")`, selection reads `"val"`, reported ordinary-text numbers read `"test"`. `setup.sampler(cfg, split, seed)` has no default split. Split-recall and recall samples are synthetic and stay seed-separated.
+  - **Packages, not just files.** The scoped design split per file. That left ~5% of held-out windows verbatim in train, because `encodings/cp*.py` repeat whole codec tables. Hashing the top-level package name instead cut it to ~0.2% (val) / ~0.8% (test) of windows. What remains is copied license headers and copied code, and the test allows at most 2%. Splits: train 2.1M prose + 6.0M code chars (capped), val 0.25M + 0.97M, test 0.29M + 0.79M.
+  - **Every old checkpoint is pre-M6.** The models, BPE and fused links in `results/toy_poc` were fitted on what is now val/test text. The BPE cache is now `bpe1024_train_v0.1_t0.1.json`, so the old `bpe1024.json` is ignored, but old `model_*.pt` / `fused_*.pt` files would still load. Retrain from pretraining ("Reproduce", step 1) before reporting anything.
 - **Next, in this order:**
-  1. **M6:** a file-level train/val/test split of `papers/` and the stdlib, applied before tokenizer fitting (`blammoe/toy/corpus.py`, `setup.py`). Scoped on 2026-10-20; no code yet. Proposed design:
-     - **Split:** `corpus.py` sorts files by sha256 of their relative name, then takes test, then val, then the rest as train. That is stable across machines and gives ≥1 file per non-zero share (only 33 papers, so pure hash buckets could leave test empty). The shares go in config fields on `ToyPOCConfig`, e.g. val 0.1 / test 0.1. `load_prose` / `load_code` take a split; apply `load_code`'s 6M-char cap after splitting.
-     - **`setup`:** add `setup.texts(cfg, split) -> (prose, code)`, cached because the stdlib load is slow, and make `split` a required argument of `setup.sampler`. `setup.tokenizer` fits BPE on **train** only.
-     - **Callers.** Every one currently builds `setup.sampler(cfg, seed=0)` and reuses `.prose/.code`:
-       - **train:** `toy_train.py`, `mixed_draw` in `toy_fused.py` and `toy_fused_hide.py`, the `toy_fused_reward.py` train stream (5151), `toy_poc.py` fit (31337) and bridge (4242), `toy_followup.py` fit sets (31337/31338) and bridge (4242).
-       - **val** (selection): `toy_fused_experts.py` `general_all` (777).
-       - **test** (reported): `general_eval_set` (`toy_fused.py`, `toy_fused_audit.py`), the `toy_poc.py` / `toy_followup.py` general eval (777), `toy_fused_analyze.py` (777), the `toy_fused_reward.py` eval (777).
-       - Split-recall and recall samples are synthetic, so they stay seed-separated.
-     - **Test:** the splits share no files; the BPE fit sees only train text; an eval window's text never appears in train text.
-  2. **Small fixes:**
+  1. **Small fixes:**
      - the bootstrap counts 0/0 resamples as accuracy 0 (`blammoe/stats.py:24,37`);
      - the enrichment-ratio baseline should count only legal entries (`fused.py` `expert_attention_mass`);
      - report exact 4-digit answer accuracy alongside digit accuracy.
-  3. **Retrain once, then run the sweep (Next steps 2 below).** Include ≥3 seeds for residual vs expert (M8). Every fused checkpoint must pass the audit gate. Re-measure the leaky-run numbers in the docs (M4: depth table, expert-choice shares, stage 2).
+  2. **Retrain once, then run the sweep (Next steps 2 below).** Include ≥3 seeds for residual vs expert (M8). Every fused checkpoint must pass the audit gate. Re-measure the leaky-run numbers in the docs (M4: depth table, expert-choice shares, stage 2).
 - **Also in the audit doc: expert-tagged buses are sensitive to routing near-ties.** In float32 on GPU, rounding that differs by batch shape flips near-tied top-k choices, and the N(0,1) `eid` embeddings amplify the flip. Keep that in mind when interpreting the hide/ID results.
 
 ## This machine (boz-linux)
@@ -52,7 +48,7 @@ in `docs/audit-2026-10-19/`.
 - **Repo and environment:** `~/BLaMMoE`. The `.venv` was built with pip (torch 2.14.1+cu130).
 - **Disk:** the root disk is ~95% full. `results/toy_poc` is a symlink to `/media/boz/Data/blammoe/results/toy_poc` on the NTFS drive. If that drive is unmounted, run `udisksctl mount -b /dev/nvme0n1p2`. Set `HF_HOME=/media/boz/Data/blammoe/hf_cache` before downloading models.
 - **GPUs:** 2× CMP 170HX, both healthy: ~195 TFLOPS bf16, ~11 fp32, 64 GB each, passed a 60 GB read-back. `42:00` runs at Gen2 ×4 (slow host transfers) and `43:00` at Gen2 ×16. Always set `CUDA_DEVICE_ORDER=PCI_BUS_ID`; then CUDA 1 = `42:00`, 2 = `43:00`, 0 = the 3060 Ti (don't use it). Run one card at a time and tell the owner before each GPU job. There is no P2P, and none is needed: run one job per card.
-- **Test fixture:** for CLI wiring checks without trained checkpoints, copy `configs/toy_poc.yaml` with `out_dir` pointed elsewhere, then run `PYTHONPATH=. python docs/audit-2026-10-19/gate_fixture_build.py <that.yaml>`. It builds untrained models plus live links with gates = 1.
+- **Test fixture:** for CLI wiring checks without trained checkpoints, copy `configs/toy_poc.yaml` with `out_dir` pointed elsewhere, then run `PYTHONPATH=. python docs/audit-2026-10-19/gate_fixture_build.py <that.yaml>`. It builds untrained models plus live links with gates = 1. To shorten training scripts, also set the per-variant `steps:` under `fused.variants`: it overrides `fused.steps`.
 
 ## Where things stood after PR #1 (one paragraph; see the audit for caveats)
 
@@ -111,7 +107,7 @@ python scripts/toy_fused.py configs/toy_poc.yaml ab_resid_all_rel_safe 2
 # 4. Which experts were chosen (selection set), attribution controls + recovery fine-tunes, causality audit
 python scripts/toy_fused_experts.py configs/toy_poc.yaml ab_experts_all_rel_safe 4
 python scripts/toy_fused_hide.py configs/toy_poc.yaml ab_experts_all_rel_safe 4
-python scripts/toy_fused_audit.py configs/toy_poc.yaml 4 16 ab_experts_all_rel_safe ab_resid_all_rel_safe
+python scripts/toy_fused_audit.py configs/toy_poc.yaml 4 ab_experts_all_rel_safe ab_resid_all_rel_safe
 ```
 
 All experiment settings live in `configs/toy_poc.yaml` (variants under

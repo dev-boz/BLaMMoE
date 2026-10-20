@@ -50,16 +50,15 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
         logf.write(line + "\n")
         logf.flush()
 
-    base = setup.sampler(cfg, seed=0)
     n_params = sum(p.numel() for p in pair.bridge_parameters())
     log(f"variant {variant} {v}: {n_params:,} bridge params on {device}")
-    history = train_fused(pair, t1, t2, mixed_draw(base.prose, base.code, L, fs.p_split, seed=4242), L,
+    history = train_fused(pair, t1, t2, mixed_draw(*setup.texts(cfg, "train"), L, fs.p_split, seed=4242), L,
                           steps=v.get("steps", fs.steps), batch_size=fs.batch_size, lr=fs.lr,
                           answer_weight=fs.answer_weight, log=log)
 
     # ---------------- evaluation (held-out seeds)
     splits = split_eval_set(L)
-    gen = general_eval_set(base.prose, base.code, L)
+    gen = general_eval_set(*setup.texts(cfg, "test"), L)
     all_links = frozenset(int(k) for k in pair.links)
     split_eval = lambda **kw: split_scores(pair, splits, t1, t2, L, **kw)  # noqa: E731
     gen_eval = lambda **kw: general_bpc(pair, gen, t1, t2, L, **kw)  # noqa: E731

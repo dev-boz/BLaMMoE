@@ -46,11 +46,11 @@ def main(cfg_path: str, threads: int = 4) -> None:
     def log(msg):
         print(f"[{time.time() - t0:6.0f}s] {msg}", flush=True)
 
-    # ---- held-out eval data (seeds disjoint from pretraining / bridge training)
+    # ---- held-out eval data (recall: seeds disjoint from training; general text: test-split files)
     recall = setup.eval_recall_samples(cfg, n=96, seed=2024)
     ev = encode_pair(recall, tok_a, tok_b, L)
     a_clean, a_blind, b_clean, b_blind = ev
-    general = MixedSampler(*_texts(cfg), L, p_recall=0.0, seed=777)
+    general = MixedSampler(*setup.texts(cfg, "test"), L, p_recall=0.0, seed=777)
     gen_samples = [general.sample() for _ in range(48)]
     g_a, _, g_b, _ = encode_pair(gen_samples, tok_a, tok_b, L)
     # selection set: every choice below is made on this, never on the reported set above
@@ -75,7 +75,7 @@ def main(cfg_path: str, threads: int = 4) -> None:
     log(f"A layer {la} routing at answers {route_a.round(2)} -> specialist {spec_a}, unrelated {unrel_a}")
 
     # ---- linear transplant (zero-shot: fitted on clean general+recall pairs only)
-    fit_sampler = MixedSampler(*_texts(cfg), L, p_recall=cfg.p_recall, seed=31337)
+    fit_sampler = MixedSampler(*setup.texts(cfg, "train"), L, p_recall=cfg.p_recall, seed=31337)
     fit_samples = [fit_sampler.sample() for _ in range(160)]
     fa, _, fb, _ = encode_pair(fit_samples, tok_a, tok_b, L)
     src_spec = Source(la, spec_a, "expert_routed")  # rule 8: routed-only source
@@ -142,7 +142,7 @@ def main(cfg_path: str, threads: int = 4) -> None:
         torch.manual_seed(0)
         d_src = A.cfg.d_model
         bridge = Bridge(d_src, B.cfg.d_model, bs.d_bus, bs.n_heads)
-        sampler = MixedSampler(*_texts(cfg), L, p_recall=cfg.p_recall, seed=4242)
+        sampler = MixedSampler(*setup.texts(cfg, "train"), L, p_recall=cfg.p_recall, seed=4242)
         hist = train_bridge(bridge, A, B, src, bs.layer_b, lambda n: [sampler.sample() for _ in range(n)],
                             tok_a, tok_b, L, steps=bs.steps, batch_size=bs.batch_size, lr=bs.lr,
                             answer_weight=bs.answer_weight,
@@ -165,16 +165,6 @@ def main(cfg_path: str, threads: int = 4) -> None:
 def _translate(W, h: torch.Tensor) -> torch.Tensor:
     flat = h.reshape(-1, h.shape[-1]).numpy()
     return torch.from_numpy(apply(W, flat).astype(np.float32)).reshape(*h.shape[:-1], W.d_out)
-
-
-_TEXT_CACHE: dict = {}
-
-
-def _texts(cfg):
-    if "t" not in _TEXT_CACHE:
-        s = setup.sampler(cfg, seed=0)
-        _TEXT_CACHE["t"] = (s.prose, s.code)
-    return _TEXT_CACHE["t"]
 
 
 if __name__ == "__main__":

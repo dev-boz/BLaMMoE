@@ -72,6 +72,8 @@ class ToyPOCConfig:
     out_dir: str = "results/toy_poc"
     seq_chars: int = 256
     p_recall: float = 0.5
+    val_share: float = 0.1  # file-level corpus split (audit M6): val = selection, test = reported
+    test_share: float = 0.1
     steps: int = 4000
     batch_size: int = 32
     lr: float = 3e-3

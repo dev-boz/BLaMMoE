@@ -57,13 +57,12 @@ def main(cfg_path: str, threads: int = 4, bridge_steps: int = 3000) -> None:
     def log(msg):
         print(f"[{time.time() - t0:6.0f}s] {msg}", flush=True)
 
-    base = setup.sampler(cfg, seed=0)
-    texts = (base.prose, base.code)
+    train_texts, test_texts = setup.texts(cfg, "train"), setup.texts(cfg, "test")
     ev = encode_pair(setup.eval_recall_samples(cfg, n=96, seed=2024), tok_a, tok_b, L)
     a_clean, a_blind, _, b_blind = ev
     s_clean_a = encode_pair(setup.eval_recall_samples(cfg, n=96, seed=2023), tok_a, tok_b, L)[0]  # selection only
     ends = b_end_chars(b_blind)
-    gen = MixedSampler(*texts, L, p_recall=0.0, seed=777)
+    gen = MixedSampler(*test_texts, L, p_recall=0.0, seed=777)
     g_a, _, g_b, _ = encode_pair([gen.sample() for _ in range(48)], tok_a, tok_b, L)
     g_ends = b_end_chars(g_b)
     with torch.no_grad():
@@ -75,7 +74,7 @@ def main(cfg_path: str, threads: int = 4, bridge_steps: int = 3000) -> None:
     log(f"target B layer {lb} expert {eb}; B general LM loss {g_base:.3f}")
 
     def fit_set(p_recall: float, n: int, seed: int):
-        s = MixedSampler(*texts, L, p_recall=p_recall, seed=seed)
+        s = MixedSampler(*train_texts, L, p_recall=p_recall, seed=seed)
         return encode_pair([s.sample() for _ in range(n)], tok_a, tok_b, L)
 
     fit_mixed = fit_set(cfg.p_recall, 160, 31337)
@@ -135,7 +134,7 @@ def main(cfg_path: str, threads: int = 4, bridge_steps: int = 3000) -> None:
         src = Source(la, spec, kind)
         torch.manual_seed(0)
         bridge = Bridge(A.cfg.d_model, B.cfg.d_model, bs.d_bus, bs.n_heads)
-        sampler = MixedSampler(*texts, L, p_recall=cfg.p_recall, seed=4242)
+        sampler = MixedSampler(*train_texts, L, p_recall=cfg.p_recall, seed=4242)
         hist = train_bridge(bridge, A, B, src, layer_b, lambda n: [sampler.sample() for _ in range(n)],
                             tok_a, tok_b, L, steps=bridge_steps, batch_size=bs.batch_size, lr=bs.lr,
                             answer_weight=bs.answer_weight, log=lambda m: log(f"  bridge {kind}@{layer_b} {m}"))

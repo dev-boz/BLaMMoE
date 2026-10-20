@@ -4,6 +4,8 @@
 out_dir: results/toy_poc
 seq_chars: 256        # every sample is a 256-char window of text
 p_recall: 0.5         # share of synthetic key->value recall docs (rest: prose/code)
+val_share: 0.1        # papers/ and stdlib FILES held out for selection (audit M6) ...
+test_share: 0.1       # ... and for reported ordinary-text numbers; BPE and training see the rest
 steps: 4000
 batch_size: 32
 lr: 0.003

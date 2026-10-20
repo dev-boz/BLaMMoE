@@ -14,9 +14,16 @@ random letter strings and values random digits, so nothing is memorisable.
 
 Prose is the papers/ markdown, code is the local CPython stdlib; both ASCII-
 filtered. Everything is generated offline — no network needed.
+
+Both are split by file, whole stdlib packages together, into train / val / test (audit
+M6) before anything is fitted on them: tokenizers and models train on ``train``, choices
+(expert selection) are made on ``val``, reported ordinary-text numbers come from
+``test``. Only text copied between files (license headers, shared code) can still
+appear on both sides (see ``split_names``).
 """
 from __future__ import annotations
 
+import hashlib
 import random
 import re
 import string
@@ -25,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 MASK = "?"
+SPLITS = ("train", "val", "test")
 _NON_ASCII = re.compile(r"[^\x20-\x7e\n]")
 
 
@@ -79,15 +87,49 @@ def recall_sample(rng: random.Random, length: int) -> Sample:
     return Sample(text=text[:length], blind=blind[:length], answer_chars=tuple(answers))
 
 
-def load_prose(papers_dir: Path) -> str:
-    return "\n".join(ascii_clean(p.read_text(errors="ignore")) for p in sorted(papers_dir.glob("*.md")))
+def split_names(names: list[str], val_share: float, test_share: float) -> dict[str, list[str]]:
+    """File-level split (audit M6), grouped by top-level package: a stdlib package's files
+    share generated tables and boilerplate (``encodings/cp*.py`` repeat whole codec maps), so
+    a per-file split put ~5% of held-out windows verbatim in train; whole packages bring that
+    under 1%, and what is left is copied license headers and code (``bz2`` / ``lzma``).
+    Groups are ordered by sha256 of their name, so the split depends only on the set of
+    names, not on the machine or filesystem order; test takes the first ``test_share`` of
+    the groups, val the next ``val_share``, train the rest. A non-zero share gets at least
+    one group (papers/ has only ~33 files). Each split keeps the input order of its names."""
+    groups = sorted({n.split("/")[0] for n in names}, key=lambda g: hashlib.sha256(g.encode()).hexdigest())
+    n_test, n_val = (max(1, round(x * len(groups))) if x > 0 else 0 for x in (test_share, val_share))
+    if n_test + n_val >= len(groups):
+        raise ValueError(f"val {val_share} + test {test_share} leave no train groups out of {len(groups)}")
+    split_of = {g: "test" for g in groups[:n_test]} | {g: "val" for g in groups[n_test : n_test + n_val]}
+    out: dict[str, list[str]] = {s: [] for s in SPLITS}
+    for n in names:
+        out[split_of.get(n.split("/")[0], "train")].append(n)
+    return out
 
 
-def load_code(max_chars: int = 6_000_000) -> str:
-    root = Path(sysconfig.get_paths()["stdlib"])
+def _keep(names: list[str], split: str, val_share: float, test_share: float) -> set[str]:
+    if split not in SPLITS:
+        raise ValueError(f"split must be one of {SPLITS}, got {split!r}")
+    return set(split_names(names, val_share, test_share)[split])
+
+
+def load_prose(papers_dir: Path, split: str, val_share: float, test_share: float) -> str:
+    paths = sorted(papers_dir.glob("*.md"))
+    keep = _keep([p.name for p in paths], split, val_share, test_share)
+    return "\n".join(ascii_clean(p.read_text(errors="ignore")) for p in paths if p.name in keep)
+
+
+def load_code(split: str, val_share: float, test_share: float, max_chars: int = 6_000_000,
+              root: Path | None = None) -> str:
+    """One split of the stdlib (``root``, default the running Python's), capped at
+    ``max_chars`` AFTER splitting so the cap never moves a file between splits."""
+    root = Path(sysconfig.get_paths()["stdlib"]) if root is None else root
+    rel = {p: p.relative_to(root).as_posix() for p in sorted(root.glob("*.py")) + sorted(root.glob("*/*.py"))}
+    rel = {p: r for p, r in rel.items() if "test" not in Path(r).parts}
+    keep = _keep(list(rel.values()), split, val_share, test_share)
     out, total = [], 0
-    for p in sorted(root.glob("*.py")) + sorted(root.glob("*/*.py")):
-        if "test" in p.parts:
+    for p, r in rel.items():
+        if r not in keep:
             continue
         t = ascii_clean(p.read_text(errors="ignore"))
         out.append(t)

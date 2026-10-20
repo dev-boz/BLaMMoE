@@ -52,8 +52,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
     splits = [split_recall_sample(rng, L) for _ in range(48)]
     s1 = make_batch([s.view("a") for s in splits], t1, L)
     s2 = make_batch([s.view("b") for s in splits], t2, L)
-    base = setup.sampler(cfg, seed=0)
-    gs = MixedSampler(base.prose, base.code, L, p_recall=0.0, seed=777)
+    gs = MixedSampler(*setup.texts(cfg, "val"), L, p_recall=0.0, seed=777)  # selection: val files
     gen = [gs.sample() for _ in range(32)]
     g1, g2 = make_batch(gen, t1, L), make_batch(gen, t2, L)
 
