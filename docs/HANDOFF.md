@@ -31,7 +31,15 @@ in `docs/audit-2026-10-19/`.
   - `hide` (all experts) is **not** the same as links off: a reader left with only the null slot still gets the attention biases. Use `disabled=` for "solo".
   - `docs/audit-2026-10-19/codex_audit_checks.py` still uses the old `hide_experts=` keyword. It is an archived probe, so it was left as is.
 - **Next, in this order:**
-  1. **M6:** a file-level train/val/test split of `papers/` and the stdlib, applied before tokenizer fitting (`blammoe/toy/corpus.py`, `setup.py`).
+  1. **M6:** a file-level train/val/test split of `papers/` and the stdlib, applied before tokenizer fitting (`blammoe/toy/corpus.py`, `setup.py`). Scoped on 2026-10-20; no code yet. Proposed design:
+     - **Split:** `corpus.py` sorts files by sha256 of their relative name, then takes test, then val, then the rest as train. That is stable across machines and gives ≥1 file per non-zero share (only 33 papers, so pure hash buckets could leave test empty). The shares go in config fields on `ToyPOCConfig`, e.g. val 0.1 / test 0.1. `load_prose` / `load_code` take a split; apply `load_code`'s 6M-char cap after splitting.
+     - **`setup`:** add `setup.texts(cfg, split) -> (prose, code)`, cached because the stdlib load is slow, and make `split` a required argument of `setup.sampler`. `setup.tokenizer` fits BPE on **train** only.
+     - **Callers.** Every one currently builds `setup.sampler(cfg, seed=0)` and reuses `.prose/.code`:
+       - **train:** `toy_train.py`, `mixed_draw` in `toy_fused.py` and `toy_fused_hide.py`, the `toy_fused_reward.py` train stream (5151), `toy_poc.py` fit (31337) and bridge (4242), `toy_followup.py` fit sets (31337/31338) and bridge (4242).
+       - **val** (selection): `toy_fused_experts.py` `general_all` (777).
+       - **test** (reported): `general_eval_set` (`toy_fused.py`, `toy_fused_audit.py`), the `toy_poc.py` / `toy_followup.py` general eval (777), `toy_fused_analyze.py` (777), the `toy_fused_reward.py` eval (777).
+       - Split-recall and recall samples are synthetic, so they stay seed-separated.
+     - **Test:** the splits share no files; the BPE fit sees only train text; an eval window's text never appears in train text.
   2. **Small fixes:**
      - the bootstrap counts 0/0 resamples as accuracy 0 (`blammoe/stats.py:24,37`);
      - the enrichment-ratio baseline should count only legal entries (`fused.py` `expert_attention_mass`);
