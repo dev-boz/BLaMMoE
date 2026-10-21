@@ -70,6 +70,8 @@ bootstrap statistics, a hardware probe, and a toy end-to-end programme:
   [`docs/toy-poc-results.md`](docs/toy-poc-results.md).
 - Two-way lockstep fusion with translator-chosen experts, a tokenizer-leak audit and
   leak-proof results: [`docs/toy-fusion-results.md`](docs/toy-fusion-results.md).
+- **Current numbers:** the seed sweep (3 cross-family + 3 same-design pairs, CIs, causal
+  expert attribution): [`docs/toy-sweep-results.md`](docs/toy-sweep-results.md).
 
 The real-model work packages (WP1 loader, WP2 collection, WP3, WP7-WP11) are specified
 in the work plan and intentionally **not** stubbed.

@@ -1,4 +1,4 @@
-# Handoff — BLaMMoE, state as of 2026-10-20
+# Handoff — BLaMMoE, state as of 2026-10-22
 
 For whoever picks this up next, human or agent. Read `CLAUDE.md` first (working agreement).
 `main` has the toy programme (PR #1 merged). Audit fixes are in progress on local branch
@@ -6,17 +6,29 @@ For whoever picks this up next, human or agent. Read `CLAUDE.md` first (working 
 
 ## Project goal (from the owner)
 
+**End goal (owner, 2026-10-21):** two MoE models that work just fine on their own (ideally
+off-the-shelf), plus a translator that allows, and encourages, free transfer of information
+between their experts. The translator need not be an LLM: it sees only activations (a
+"large latent model"). Keep the small links until they stop being enough, then test an
+LLM-style translator against alternatives (e.g. a non-generative decision model like Jev).
+
 Step one is proving that experts can be translated between models **at all**. Improvements
 are a bonus. Mixing e.g. a Qwen with a Mistral and getting a *worse* result still counts as
 success. So prioritise work that makes "information transfers, and it travels via experts"
 airtight over ordinary-text quality.
 
-## START HERE: run the sweep
+## START HERE: the sweep is done
 
-**All audit fixes needed before retraining are in, and the sweep runner is built and
-smoke-tested (`faeaddf`). The next step is the GPU run: follow `docs/SWEEP-RUNSHEET.md`** (preflight,
-the exact command, what to watch, resume, and a prompt for the session after). The owner
-starts it in person, so don't launch GPU jobs without them.
+**Results: `docs/toy-sweep-results.md`** (written in the owner's voice; keep that style when
+editing it). Ran 2026-10-21 on CMP 43:00, 3.4 h; every gate passed. In short: transfer in both
+directions in 5 of 6 pairs (97.5-99.5%, chance ~10%); r1's A-from-B expert run did not learn,
+and a reseeded retry (`fused.seed: 1`, `results/toy_sweep/r1_fseed1`) reached 81.3% / 98.4%
+after a 300-step fine-tune. Attribution now picks the partner expert **causally** on the
+seed-2026 selection set (`causal_chosen`, bd8b7b3): the attention-share pick was wrong in
+12 of 13 directions. The residual-stream translator works about as well as the expert bus,
+and every fused pair is 0.002-0.02 bits/char worse than solo on ordinary text.
+**Next: Next steps 3** (complementary models, the first test of "encourages"). Still tell
+the owner before each GPU job, one card at a time.
 
 ## Audit fixes (background)
 
@@ -57,6 +69,10 @@ in `docs/audit-2026-10-19/`.
 - **Test fixture:** for CLI wiring checks without trained checkpoints, copy `configs/toy_poc.yaml` with `out_dir` pointed elsewhere, then run `PYTHONPATH=. python docs/audit-2026-10-19/gate_fixture_build.py <that.yaml>`. It builds untrained models plus live links with gates = 1. To shorten training scripts, also set the per-variant `steps:` under `fused.variants`: it overrides `fused.steps`.
 
 ## Where things stood after PR #1 (one paragraph; see the audit for caveats)
+
+> **Superseded by the sweep** (`docs/toy-sweep-results.md`). Two claims below no longer hold:
+> the attention-chosen expert is usually *not* the one carrying the transfer (pick causally),
+> and the residual stream does not fail in one direction (it works about as well, 3 seeds).
 
 At toy scale, two independently trained, frozen MoE language models with different
 tokenizers, widths and expert counts pass information to each other expert-to-expert.
@@ -125,6 +141,7 @@ the write-ups.
 
 | doc | what |
 |---|---|
+| **`docs/toy-sweep-results.md`** | **Current numbers.** The 2026-10-21 seed sweep: 3 cross-family + 3 same-design pairs, CIs, causal attribution, residual baseline, ensemble. Where older docs disagree, this wins. |
 | `docs/toy-poc-results.md` | One-way: A's expert → B (linear transplant 96.5%, learned bridge 92%), depth/expert/data ablations. Unaffected by the leak (B reading char-level A cannot leak). |
 | `docs/toy-fusion-results.md` | Two-way fused pair, translator expert choice, depth, stage-2 fine-tuning, **the audit** (banner at top) and the **leak-proof results** (section at the end). |
 | Shared summary page | https://claude.ai/code/artifact/7accd112-77a6-4a28-90bc-0bcdcafec03e (private until shared from its Share menu) |
@@ -152,7 +169,7 @@ the write-ups.
 1. **Independent adversarial audit** of the eval path before any scale-up. Use a fresh
    session with no stake in the results, told to *find leaks and eval bugs*, not to
    confirm. Cheaper to catch at 3M params than at 7B. (External-review recommendation.)
-2. **Review sweep on GPU** (the external review's asks). **Runner built (2026-10-20):**
+2. **DONE 2026-10-21: review sweep on GPU**, see `docs/toy-sweep-results.md`. **Runner (2026-10-20):**
    `scripts/toy_sweep.py configs/toy_sweep.yaml [threads] [unit ...]`, helpers and summary in
    `blammoe/toy/sweep.py`.
    - **Units.** Each unit is a full toy_poc-style run in `results/toy_sweep/<unit>/` (a symlink
@@ -175,10 +192,13 @@ the write-ups.
      (with no unit jobs left) collects everything.
    - `toy_fused.py` now saves per-document rows (`per_doc`) for fused, shuffled-partner and
      solo, which the CIs need.
-3. **Data-difference dose-response:** train B on progressively different data from A
-   (shifted code/prose mix → disjoint files → no code) and watch transfer fall off. This
-   tests how much survives different labs' data. Needs a file-subset option in
-   `blammoe/toy/corpus.py`.
+3. **Complementary models / data-difference dose-response (next).** Pretrain A mostly on
+   code and B mostly on prose, then train the links on ordinary mixed text only, with no
+   recall task. Success = each model improves on its weak domain while staying fine alone:
+   the first test of "encourages free transfer". A plain output average already beats both
+   solos on ordinary text (0.07-0.11 bits at shared positions), so the models do make
+   different errors, but today's links don't use them. Then the dose-response: shifted mix
+   → disjoint files → no code. Needs a file-subset option in `blammoe/toy/corpus.py`.
 4. **Stage-2 reward-weight sweep** (λ ≈ 10-30) under `safe_mask`. λ=2 did nothing and
    ~100× wrecked accuracy; the interesting range is between. Then reward on generated
    text, which needs lockstep generation across two tokenizers (not built).
@@ -190,13 +210,17 @@ the write-ups.
 
 ## Open caveats on what *is* claimed
 
-- Toy scale (2-3.5M params), one seed per result, no CIs yet (next step 2).
+- Toy scale (2-3.5M params), 3 seeds per pair type, CIs over 96 documents (the sweep).
+  Scores are teacher-forced, not generated.
 - The channel is narrow: a recall answer is ~3 bits, mostly carried at the last layer.
   First-block-only exchange reached 38.6% one way (under the old mask; not rerun leak-proof).
 - Both toy models saw the same training data, the friendliest case for alignment.
-- Expert-level > residual-level is one seed and one budget. A longer or reseeded
-  residual run could still learn.
-- The ensemble baseline is implemented but not yet run. Note that for split recall an
+- Expert-level is **not** better than residual-level on accuracy (within 1.3 points paired,
+  except +5.2 once). What the expert bus adds is attribution: which experts carry it.
+- The information lands in the receiver's residual stream, not its experts. This is a channel
+  between models, not yet a portable expert or a translator that generalises to a new
+  partner or task.
+- The ensemble baseline has run (in the sweep). Note that for split recall an
   output-level mixture trivially gets the informed model's answer. The claim is about
   information entering a model's *own* computation, so the mixture is a reference
   point, not a competitor.
