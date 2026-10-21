@@ -1,8 +1,8 @@
 # Handoff — BLaMMoE, state as of 2026-10-22
 
 For whoever picks this up next, human or agent. Read `CLAUDE.md` first (working agreement).
-`main` has the toy programme (PR #1 merged). Audit fixes are in progress on local branch
-**`audit-fixes`** (committed locally, not pushed).
+`main` has the toy programme (PR #1 merged). The audit fixes, the seed sweep and its write-up
+are on local branch **`audit-fixes`** (committed, not pushed).
 
 ## Project goal (from the owner)
 
@@ -17,18 +17,70 @@ are a bonus. Mixing e.g. a Qwen with a Mistral and getting a *worse* result stil
 success. So prioritise work that makes "information transfers, and it travels via experts"
 airtight over ordinary-text quality.
 
-## START HERE: the sweep is done
+## START HERE: complementary models (next session)
 
-**Results: `docs/toy-sweep-results.md`** (written in the owner's voice; keep that style when
-editing it). Ran 2026-10-21 on CMP 43:00, 3.4 h; every gate passed. In short: transfer in both
-directions in 5 of 6 pairs (97.5-99.5%, chance ~10%); r1's A-from-B expert run did not learn,
-and a reseeded retry (`fused.seed: 1`, `results/toy_sweep/r1_fseed1`) reached 81.3% / 98.4%
-after a 300-step fine-tune. Attribution now picks the partner expert **causally** on the
-seed-2026 selection set (`causal_chosen`, bd8b7b3): the attention-share pick was wrong in
-12 of 13 directions. The residual-stream translator works about as well as the expert bus,
-and every fused pair is 0.002-0.02 bits/char worse than solo on ordinary text.
-**Next: Next steps 3** (complementary models, the first test of "encourages"). Still tell
-the owner before each GPU job, one card at a time.
+**State (2026-10-22).** Branch `audit-fixes`, local only, never pushed (head `9e15964`), with
+96 tests passing. The seed sweep and causal attribution are done and written up in
+**`docs/toy-sweep-results.md`**. That doc is written in the owner's voice, so keep the style
+when editing it (first person, plain wording, Australian spelling). The owner edits docs as
+they go: commit write-ups straight away. Sweep in short (CMP 43:00, 3.4 h, every gate passed):
+- **Transfer:** both directions in 5 of 6 pairs (97.5-99.5%, chance ~10%). r1's A-from-B
+  expert run did not learn. A reseeded retry (`fused.seed: 1`, `results/toy_sweep/r1_fseed1`)
+  reached 81.3%, and 98.4% after a 300-step fine-tune.
+- **Attribution:** now picks the partner expert causally on the seed-2026 selection set
+  (`causal_chosen`, bd8b7b3). Hiding it leaves 11-41%. The old attention-share pick was wrong
+  in 12 of 13 directions; its outputs are kept in `<unit>/attnsel/`.
+- **Residual stream:** works about as well as the expert bus.
+- **Ordinary text:** every fused pair is 0.002-0.02 bits/char worse than solo. A plain output
+  average beats both solos (0.07-0.11 bits at shared positions), so the models make different
+  errors, but the links don't use them.
+
+**Why this experiment.** It tests the end goal's "encourages free transfer" (see the goal
+above). Today the links only transfer when a task forces it (split recall), and both models
+saw the same text. Give each model knowledge the other lacks, train the links on ordinary
+text only, and see whether transfer happens because it helps.
+
+**Design (agreed in outline with the owner; details still open):**
+1. **Per-model data mix.** `MixedSampler` (`blammoe/toy/corpus.py`) splits non-recall windows
+   50/50 prose/code for every model. Add a field to `ToyModelSpec` (`blammoe/toy/config.py`),
+   e.g. `p_prose: float = 0.5`, where 0.5 reproduces every existing run. Thread it through
+   `setup.sampler` into `scripts/toy_train.py`. Then: A (char) `p_prose: 0.1` = mostly code,
+   B (BPE) `p_prose: 0.9` = mostly prose. Test that 0.5 draws exactly as before.
+2. **Open choices to settle first:**
+   - Keep recall docs in pretraining (`p_recall`)? Keeping them keeps the models comparable
+     to the sweep.
+   - Fit B's BPE on B's own mix (more realistic) or the shared mix?
+   - Which mix strength: start at 0.1/0.9, and later run the dose-response 0.5 → 0.1 →
+     disjoint files (Next steps 3).
+3. **Links trained on ordinary text only:** a variant with `p_split: 0` in `fused` (check
+   that `mixed_draw` handles 0), both the expert bus and the residual stream, `safe_mask` on,
+   char bias, every layer, 3000 steps. Every checkpoint must pass `scripts/toy_fused_audit.py`.
+4. **Per-domain eval (new code).** `general_bpc` / `general_eval_set` mix prose and code.
+   Add separate prose-only and code-only test sets (`setup.texts(cfg, "test")`) and report
+   bits/char for each model:
+   - fused vs solo vs shuffled partner, per domain;
+   - the plain ensemble per domain.
+
+   **Success:** A improves on prose and/or B on code versus solo, and beats the shuffled
+   partner, while staying fine alone (frozen, so automatic).
+5. **Controls:** a same-domain partner (A with another code-heavy model) as the capacity
+   control. If GPU time allows, 3 seeds with the sweep runner (`configs/toy_sweep.yaml`
+   `overrides`, new `out_dir`).
+6. **Encouraging transfer (later variants):**
+   - the stage-2 reward (`scripts/toy_fused_reward.py`, Next steps 4);
+   - a JEPA-style extra loss where the links predict the partner's expert outputs from their
+     own (Claude's suggestion, not yet agreed with the owner).
+
+**Practicalities.** GPU = CMP `43:00` (`CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2`),
+one card, and tell the owner before each job (they may call stop). Run long jobs in tmux with
+a Haiku subagent watching the log. The `results/` symlinks point at `/media/boz/Data`: mount
+it first (`udisksctl mount -b /dev/nvme0n1p2`). The root disk has ~4.7 GB free. Timings on
+43:00: one pretrain 4-6 min, one fusion ~8 min, an audit of 2 variants ~7 min, hide ~8 min.
+
+**Prompt for the next session:**
+> Resume BLaMMoE: read docs/HANDOFF.md "START HERE". Build the complementary-models
+> experiment (per-model data mix, links on ordinary text only, per-domain eval), with tests,
+> then tell me before running it on the CMP at 43:00.
 
 ## Audit fixes (background)
 
@@ -91,7 +143,7 @@ improves ordinary-text prediction once the leak is closed.
 git clone https://github.com/dev-boz/BLaMMoE && cd BLaMMoE
 git checkout audit-fixes   # or main
 uv venv && uv pip install -e ".[dev]"     # CUDA torch on a GPU box; see README for CPU-only
-PYTHONPATH=. .venv/bin/python -m pytest -q   # 93 tests, ~13 s on CPU
+PYTHONPATH=. .venv/bin/python -m pytest -q   # 96 tests, ~13 s on CPU
 CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. .venv/bin/python scripts/hw_probe.py   # ONE card at a time (it probes every visible GPU)
 ```
 
