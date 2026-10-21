@@ -7,7 +7,7 @@ from blammoe.toy.corpus import Sample, recall_sample, split_recall_sample
 from blammoe.toy.batching import make_batch
 from blammoe.toy.fused import BusAblation, FusedPair, expert_output_means
 from blammoe.toy.fused_train import (
-    chosen_experts, ensemble_baseline, general_bpc, hide_ablation, mixed_draw, recovery_finetune, split_eval_set, split_scores,
+    causal_chosen, chosen_experts, ensemble_baseline, general_bpc, hide_ablation, mixed_draw, recovery_finetune, split_eval_set, split_scores,
     train_fused,
 )
 from blammoe.toy.moe import ToyMoEConfig, ToyMoELM
@@ -131,6 +131,22 @@ def test_chosen_experts_reads_the_selection_set_attention_shares():
     assert c["joint"] == [frozenset({0, 5}), frozenset({0, 2, 3, 5})]
     one = chosen_experts(per_link, "m1_reads_m2")
     assert one["main"] == 0 and one["joint"] == [frozenset({0, 1})]  # top-1 everywhere is e0: no 1-set
+
+
+def test_causal_chosen_ranks_partner_experts_by_the_damage_hiding_them_does():
+    pair, ta, tb = pair_and_toks()
+    for lk in pair.links.values():
+        with torch.no_grad():
+            lk.rx_a.gate.fill_(1.0)
+            lk.rx_b.gate.fill_(1.0)
+    sel = split_eval_set(L, n=3, seed=8)
+    ch_m2, ch_m1 = causal_chosen(pair, sel, ta, tb, L)
+    hid = hide_ablation(pair, sel, ta, tb, L)
+    assert ch_m2["acc"] == hid["hide_m2_expert_from_m1"] and ch_m1["acc"] == hid["hide_m1_expert_from_m2"]
+    for ch in (ch_m2, ch_m1):
+        order = sorted(ch["acc"], key=lambda e: (ch["acc"][e], e))
+        assert ch["main"] == order[0] and ch["acc"][ch["main"]] == min(ch["acc"].values())
+        assert ch["joint"] == [frozenset(order[:2]), frozenset(order[:3])]
 
 
 def test_exact_answer_accuracy_needs_every_digit_of_an_answer():

@@ -85,6 +85,23 @@ def test_unit_summary_reads_cis_gate_and_attribution_and_pairs_variants(tmp_path
     assert across_seeds({u.name: unit_summary(u) for u in us}, "rung2") == {}
 
 
+def test_attribution_reports_the_attention_pick_when_selection_is_causal(tmp_path):
+    sc = SweepConfig(out_dir=str(tmp_path), seeds=[[0, 1]], variants=["e", "r"], rung2=False)
+    [u] = units(sc, BASE)
+    _write_unit(u.out, 1.0, True)
+    path = u.out / "fused_e_hide.json"
+    h = json.loads(path.read_text())
+    h["chosen"]["A_reads_B"]["attention"] = {"main": 0}  # causal pick e1 (0.25), attention pick e0 (0.9)
+    h["chosen"]["B_reads_A"]["attention"] = {"main": 1}
+    path.write_text(json.dumps(h))
+    a = unit_summary(u)["variants"]["e"]["attribution"]
+    assert (a["m1_needs_partner"]["chosen_expert"], a["m1_needs_partner"]["hide_chosen"]) == (1, 0.25)
+    assert (a["m1_needs_partner"]["attention_expert"], a["m1_needs_partner"]["hide_attention"]) == (0, 0.9)
+    assert a["m2_needs_partner"]["hide_attention"] == 0.95
+    agg = across_seeds({u.name: unit_summary(u)}, "main")
+    assert agg["e"]["hide_attention/m1_needs_partner"]["mean"] == 0.9
+
+
 def test_fused_seed_override_reaches_the_unit_config(tmp_path):
     from blammoe.config import _from_dict
     from blammoe.toy.config import ToyPOCConfig

@@ -119,7 +119,8 @@ def variant_summary(out: Path, variant: str) -> dict | None:
 def attribution(hide: dict) -> dict:
     """Per direction (m1 reads m2 = A needs B): accuracy with nothing ablated, the chosen expert
     hidden / blanked, the worst other single expert hidden, every tag zeroed / shifted, the
-    worst joint set hidden, and the recovery fine-tunes (after, and whether they passed the gate)."""
+    worst joint set hidden, and the recovery fine-tunes (after, and whether they passed the gate).
+    Runs with causal selection also give the attention-share pick and its hide (``attention_*``)."""
     ab, out = hide["ablations"], {}
     for k, reader, (h, b, t, j) in (
         ("m1_needs_partner", "A_reads_B", ("hide_m2_expert_from_m1", "blank_m2_expert_for_m1", "tags_m2_for_m1",
@@ -133,6 +134,9 @@ def attribution(hide: dict) -> dict:
                   "blank_chosen": ab[b][main], "hide_worst_other": min(others) if others else None,
                   "tags_zero": ab[t]["zero"], "tags_shift": ab[t]["shift"],
                   "joint_worst": min(ab[j].values()) if ab[j] else None}
+        if "attention" in hide["chosen"][reader]:
+            att = str(hide["chosen"][reader]["attention"]["main"])
+            out[k]["attention_expert"], out[k]["hide_attention"] = int(att), ab[h][att]
         for arm, r in hide.get("finetune", {}).items():
             out[k][f"finetune_{arm}"] = r["after"][k]
     out["finetune_gates_ok"] = all(r["gate"]["ok"] for r in hide.get("finetune", {}).values())
@@ -173,6 +177,7 @@ def across_seeds(summaries: dict[str, dict], kind: str) -> dict:
                         d.setdefault(f"{cond}/{k}/{m}", []).append(x[m])
             for k, a in r.get("attribution", {}).items():
                 if isinstance(a, dict):
-                    for m in ("hide_chosen", "blank_chosen", "tags_shift"):
-                        d.setdefault(f"{m}/{k}", []).append(a[m])
+                    for m in ("hide_chosen", "blank_chosen", "tags_shift", "hide_attention"):
+                        if m in a:
+                            d.setdefault(f"{m}/{k}", []).append(a[m])
     return {v: {m: seed_summary(xs) for m, xs in d.items()} for v, d in out.items()}

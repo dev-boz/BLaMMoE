@@ -8,17 +8,18 @@ the partner's split-recall answers that need it (blammoe.toy.fused_train.hide_ab
 * blank - one expert at a time keeps its expert-ID tag, slot and mask but sends a constant, its
           mean output on the selection set (content-only ablation);
 * tags  - every tag zeroed, or shifted to the wrong expert, outputs kept (ID-only ablation);
-* joint - each link's most-read experts hidden together (B<-A's leftover 29.1% ran through
-          A expert 0 at links 0/1, which hiding the one chosen expert left open);
-* recovery fine-tune - the links retrained briefly (``hide:`` in the YAML) with the chosen experts
-          hidden in both directions. The reader never saw them missing in training, so a collapse
+* joint - the 2 and the 3 most damaging experts on the selection set hidden together;
+* recovery fine-tune - the links retrained briefly (``hide:`` in the YAML) with the chosen expert
+          (and, separately, the 2 most damaging) hidden in both directions. The reader never saw them missing in training, so a collapse
           may only mean its attention broke; if accuracy comes back through other experts, the
           information is not exclusive to them. The same fine-tune with nothing hidden is the
           control. Every fine-tuned copy must pass the float64 causality gate on the windows it
           is scored on, else the script exits 1.
 
-"Chosen" experts come from fused_<variant>_experts.json (run scripts/toy_fused_experts.py first),
-measured on the seed-2026 selection set, as are the blank constants. Everything reported here is
+"Chosen" = causal: on the seed-2026 selection set, the partner expert whose hiding costs the most
+(blammoe.toy.fused_train.causal_chosen); the blank constants come from the same set. The old pick,
+largest attention share in fused_<variant>_experts.json (run scripts/toy_fused_experts.py first),
+is kept under "attention" for comparison: it is not the expert the information travels in. Everything reported here is
 on the seed-2025 eval set. Writes <out_dir>/fused_<variant>_hide.json (+ fused_<variant>_ft_<arm>.pt).
 
     PYTHONPATH=. python scripts/toy_fused_hide.py configs/toy_poc.yaml <variant> [threads]
@@ -39,7 +40,7 @@ from blammoe.toy.config import ToyPOCConfig
 from blammoe.toy.corpus import split_recall_sample
 from blammoe.toy.fused import NO_ABLATION, BusAblation, FusedPair, expert_output_means
 from blammoe.toy.fused_train import (
-    chosen_experts, hide_ablation, mixed_draw, recovery_finetune, split_eval_set,
+    causal_chosen, chosen_experts, hide_ablation, mixed_draw, recovery_finetune, split_eval_set,
 )
 from blammoe.toy.moe import load
 
@@ -68,18 +69,22 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> int:
 
     # selection set (seed 2026, as toy_fused_experts.py): chosen experts and blank constants
     sel = json.loads((out / f"fused_{variant}_experts.json").read_text())["split_needs_partner"]
-    ch_b, ch_a = chosen_experts(sel, "m1_reads_m2"), chosen_experts(sel, "m2_reads_m1")  # B's read by A, A's by B
+    att_b, att_a = chosen_experts(sel, "m1_reads_m2"), chosen_experts(sel, "m2_reads_m1")  # B's read by A, A's by B
     rng = random.Random(2026)
     sel_docs = [split_recall_sample(rng, L) for _ in range(48)]
     means = expert_output_means(pair, make_batch([s.view("a") for s in sel_docs], tok_a, L, device=device),
                                 make_batch([s.view("b") for s in sel_docs], tok_b, L, device=device))
-    print(f"chosen: A reads B e{ch_b['main']} (joint {[fmt(s) for s in ch_b['joint']]}) | "
-          f"B reads A e{ch_a['main']} (joint {[fmt(s) for s in ch_a['joint']]})", flush=True)
+    ch_b, ch_a = causal_chosen(pair, sel_docs, tok_a, tok_b, L)
+    print(f"chosen: A reads B e{ch_b['main']} (joint {[fmt(s) for s in ch_b['joint']]}, attention e{att_b['main']}) | "
+          f"B reads A e{ch_a['main']} (joint {[fmt(s) for s in ch_a['joint']]}, attention e{att_a['main']})", flush=True)
+
+    def chosen_json(ch, att):
+        return {**ch, "joint": [sorted(s) for s in ch["joint"]],
+                "attention": {**att, "joint": [sorted(s) for s in att["joint"]]}}
 
     splits = split_eval_set(L)  # seed 2025, the reported set
     res = {"variant": variant,
-           "chosen": {"A_reads_B": {**ch_b, "joint": [sorted(s) for s in ch_b["joint"]]},
-                      "B_reads_A": {**ch_a, "joint": [sorted(s) for s in ch_a["joint"]]}}}
+           "chosen": {"A_reads_B": chosen_json(ch_b, att_b), "B_reads_A": chosen_json(ch_a, att_a)}}
     res["ablations"] = hide_ablation(pair, splits, tok_a, tok_b, L, joint_m1=ch_a["joint"],
                                      joint_m2=ch_b["joint"], blank_values=means)
     ab = res["ablations"]
@@ -102,9 +107,7 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> int:
         gate_docs = [(s.view_a, s.view_b) for s in splits]
         arms = {"none": (NO_ABLATION, NO_ABLATION),
                 "main": (BusAblation(hide=frozenset({ch_a["main"]})), BusAblation(hide=frozenset({ch_b["main"]})))}
-        top1_a, top1_b = (frozenset(t[0] for t in c["per_link"].values()) for c in (ch_a, ch_b))
-        if (top1_a, top1_b) != (frozenset({ch_a["main"]}), frozenset({ch_b["main"]})):
-            arms["links_top1"] = (BusAblation(hide=top1_a), BusAblation(hide=top1_b))
+        arms["top2"] = (BusAblation(hide=ch_a["joint"][0]), BusAblation(hide=ch_b["joint"][0]))
         res["finetune"] = {}
         for arm, abl in arms.items():
             print(f"-- recovery fine-tune '{arm}': hide A {fmt(abl[0].hide)} from B, B {fmt(abl[1].hide)} from A, "

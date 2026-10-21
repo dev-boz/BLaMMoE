@@ -184,6 +184,17 @@ def _label(experts) -> str:
     return "+".join(str(e) for e in sorted(experts))
 
 
+def _one_way(pair: FusedPair, splits, tok1, tok2, L: int) -> tuple[Callable, Callable]:
+    """(m1's needs-partner accuracy with m2's bus ablated, m2's with m1's ablated)."""
+    def m1_acc(abl_m2: BusAblation) -> float:
+        return split_scores(pair, splits, tok1, tok2, L, ablate=(NO_ABLATION, abl_m2))["m1_needs_partner"]["acc"]
+
+    def m2_acc(abl_m1: BusAblation) -> float:
+        return split_scores(pair, splits, tok1, tok2, L, ablate=(abl_m1, NO_ABLATION))["m2_needs_partner"]["acc"]
+
+    return m1_acc, m2_acc
+
+
 def hide_ablation(
     pair: FusedPair, splits, tok1, tok2, L: int, *, joint_m1: tuple[frozenset[int], ...] = (),
     joint_m2: tuple[frozenset[int], ...] = (), blank_values: tuple[dict, dict] | None = None,
@@ -201,13 +212,7 @@ def hide_ablation(
               experts, hidden from model 2)."""
     n1, n2 = pair.A.cfg.n_experts, pair.B.cfg.n_experts
     bv1, bv2 = blank_values or (None, None)
-
-    def m1_acc(abl_m2: BusAblation) -> float:
-        return split_scores(pair, splits, tok1, tok2, L, ablate=(NO_ABLATION, abl_m2))["m1_needs_partner"]["acc"]
-
-    def m2_acc(abl_m1: BusAblation) -> float:
-        return split_scores(pair, splits, tok1, tok2, L, ablate=(abl_m1, NO_ABLATION))["m2_needs_partner"]["acc"]
-
+    m1_acc, m2_acc = _one_way(pair, splits, tok1, tok2, L)
     return {
         "none": {"m1_needs_partner": m1_acc(NO_ABLATION), "m2_needs_partner": m2_acc(NO_ABLATION)},
         "hide_m2_expert_from_m1": {e: m1_acc(BusAblation(hide=frozenset({e}))) for e in range(n2)},
@@ -257,3 +262,21 @@ def chosen_experts(per_link: dict, direction: str) -> dict:
         if len(u) > 1 and u not in joint:
             joint.append(u)
     return {"main": max(range(n), key=lambda e: total[e]), "per_link": top, "joint": joint}
+
+
+def causal_chosen(pair: FusedPair, splits, tok1, tok2, L: int) -> tuple[dict, dict]:
+    """The partner experts each translator depends on, picked on a SELECTION set (pass one the
+    reported numbers never use): hide one partner expert at a time, at every link, and rank by
+    the needs-partner accuracy left. Attention share (``chosen_experts``) is not this: in the
+    2026-10-21 sweep it named an expert whose hiding barely mattered, while hiding another
+    collapsed transfer, in 12 of 14 directions. Returns (m2's experts read by m1, m1's read by
+    m2), each {"main": the most damaging, "acc": {e: accuracy with e hidden}, "joint": the 2 and
+    the 3 most damaging, to hide together}."""
+    m1_acc, m2_acc = _one_way(pair, splits, tok1, tok2, L)
+
+    def pick(acc: dict[int, float]) -> dict:
+        order = sorted(acc, key=lambda e: (acc[e], e))
+        return {"main": order[0], "acc": acc, "joint": [frozenset(order[:k]) for k in (2, 3)]}
+
+    return (pick({e: m1_acc(BusAblation(hide=frozenset({e}))) for e in range(pair.B.cfg.n_experts)}),
+            pick({e: m2_acc(BusAblation(hide=frozenset({e}))) for e in range(pair.A.cfg.n_experts)}))
