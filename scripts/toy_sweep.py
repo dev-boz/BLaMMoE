@@ -88,7 +88,7 @@ def jobs(unit: Unit, cfg_path: str, threads: int, do_hide: bool):
     for m in ("model_a", "model_b"):
         if unit.kind == "rung2":
             src = unit.copy_models[f"{m}.pt"]
-            yield f"copy {m} <- {src}", (out / f"{m}.pt").exists(), lambda s=src, m=m: shutil.copyfile(s, out / f"{m}.pt")
+            yield f"copy {m} <- {src}", (out / f"{m}.pt").exists(), lambda s=src, m=m: shutil.copyfile(s, out / f"{m}.pt") and None
         else:
             yield f"pretrain {m}", (out / f"{m}.pt").exists(), lambda m=m: toy_train.main(cfg_path, m, threads)
     for v in variants:

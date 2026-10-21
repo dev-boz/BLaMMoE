@@ -26,9 +26,9 @@ from blammoe.toy.moe import load
 
 def main(cfg_path: str, variant: str, threads: int = 4) -> None:
     torch.set_num_threads(threads)
-    torch.manual_seed(0)
     device = pick_device()
     cfg = ToyPOCConfig.from_yaml(cfg_path)
+    torch.manual_seed(cfg.fused.seed)
     fs, out, L = cfg.fused, Path(cfg.out_dir), cfg.seq_chars
     v = fs.variants[variant]
     tok_a, tok_b = setup.tokenizer(cfg.model_a, cfg), setup.tokenizer(cfg.model_b, cfg)
@@ -52,7 +52,7 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
 
     n_params = sum(p.numel() for p in pair.bridge_parameters())
     log(f"variant {variant} {v}: {n_params:,} bridge params on {device}")
-    history = train_fused(pair, t1, t2, mixed_draw(*setup.texts(cfg, "train"), L, fs.p_split, seed=4242), L,
+    history = train_fused(pair, t1, t2, mixed_draw(*setup.texts(cfg, "train"), L, fs.p_split, seed=4242 + fs.seed), L,
                           steps=v.get("steps", fs.steps), batch_size=fs.batch_size, lr=fs.lr,
                           answer_weight=fs.answer_weight, log=log)
 

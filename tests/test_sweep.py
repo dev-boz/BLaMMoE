@@ -83,3 +83,11 @@ def test_unit_summary_reads_cis_gate_and_attribution_and_pairs_variants(tmp_path
     assert agg["e"]["hide_chosen/m1_needs_partner"]["mean"] == 0.25
     assert "hide_chosen/m1_needs_partner" not in agg["r"]  # no attribution run for the residual variant
     assert across_seeds({u.name: unit_summary(u) for u in us}, "rung2") == {}
+
+
+def test_fused_seed_override_reaches_the_unit_config(tmp_path):
+    from blammoe.config import _from_dict
+    from blammoe.toy.config import ToyPOCConfig
+    [s0] = units(SweepConfig(out_dir=str(tmp_path), seeds=[[0, 1]], overrides={"fused": {"seed": 1}}), BASE)
+    assert _from_dict(ToyPOCConfig, s0.cfg).fused.seed == 1
+    assert _from_dict(ToyPOCConfig, BASE).fused.seed == 0  # default: the pre-retry runs

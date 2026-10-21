@@ -44,6 +44,7 @@ class FusedSpec:
     d_bus: int = 64
     n_heads: int = 4
     p_split: float = 0.5  # share of split-view recall samples (rest: prose/code, both see it)
+    seed: int = 0  # bridge init and training-draw order (0 = every run before the sweep's r1 retry)
     variants: dict = field(default_factory=dict)
 
 
