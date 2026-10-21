@@ -78,7 +78,6 @@ CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. \
 
 ## Prompt for the next Claude session
 
-> Resume BLaMMoE. I ran the toy sweep (docs/SWEEP-RUNSHEET.md) on the CMP at 43:00; results are
-> in results/toy_sweep (summary.json, sweep.log). Check every unit finished and every gate
+  Check every unit finished and every gate
 > passed, then read the summary against the project goal (does information transfer, and does it
 > travel via the chosen experts?) and draft the results write-up.
