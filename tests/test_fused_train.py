@@ -7,7 +7,8 @@ from blammoe.toy.corpus import Sample, recall_sample, split_recall_sample
 from blammoe.toy.batching import make_batch
 from blammoe.toy.fused import BusAblation, FusedPair, expert_output_means
 from blammoe.toy.fused_train import (
-    causal_chosen, chosen_experts, ensemble_baseline, general_bpc, hide_ablation, mixed_draw, recovery_finetune, split_eval_set, split_scores,
+    causal_chosen, chosen_experts, domain_eval_sets, ensemble_baseline, ensemble_bits, general_bpc, hide_ablation,
+    mixed_draw, recovery_finetune, split_eval_set, split_scores,
     train_fused,
 )
 from blammoe.toy.moe import ToyMoEConfig, ToyMoELM
@@ -171,3 +172,30 @@ def test_exact_answer_accuracy_needs_every_digit_of_an_answer():
     assert (r["n"], r["acc"], r["n_answers"], r["exact"]) == (8, 7 / 8, 2, 0.5)
     s = score_answers(logits, b)
     assert (s["n"], s["acc"], s["n_answers"], s["exact"]) == (8, 7 / 8, 2, 0.5)
+
+
+def test_ordinary_text_only_links_and_per_domain_eval():
+    """Complementary-models pieces: p_split 0 draws only ordinary text (both models see the same
+    window), per-domain eval sets, per-document bits that pool back to bits/char, and the
+    per-domain ensemble."""
+    draw = mixed_draw(PROSE, CODE, L, 0.0, seed=2)
+    items = draw(40)
+    assert all(a is b and a.kind in ("prose", "code") for a, b in items)
+    assert {a.kind for a, _ in items} == {"prose", "code"}
+
+    sets = domain_eval_sets(PROSE, CODE, L, n=3, seed=4)
+    assert [d.kind for d in sets["prose"]] == ["prose"] * 3 and [d.kind for d in sets["code"]] == ["code"] * 3
+    assert [d.text for d in domain_eval_sets(PROSE, CODE, L, n=3, seed=4)["code"]] == [d.text for d in sets["code"]]
+
+    pair, ta, tb = pair_and_toks()
+    docs = sets["prose"] + sets["code"]
+    r = general_bpc(pair, docs, ta, tb, L, per_doc=True)
+    for m in ("m1_bpc", "m2_bpc"):
+        rows = r["per_doc"][m]
+        assert len(rows) == 6 and abs(sum(b for b, _ in rows) / sum(c for _, c in rows) - r[m]) < 1e-6
+    assert set(general_bpc(pair, docs, ta, tb, L)) == {"m1_bpc", "m2_bpc"}  # per_doc off by default
+
+    e = ensemble_bits(pair, docs, ta, tb, L)
+    assert e["shared_positions"] > 0 and set(e["bits"]) == {"m1_solo", "m2_solo", "mixture"}
+    base = ensemble_baseline(pair, docs, split_eval_set(L, n=2, seed=6), ta, tb, L)
+    assert base["general_bits"] == e["bits"] and base["general_shared_positions"] == e["shared_positions"]

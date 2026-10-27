@@ -20,8 +20,8 @@ airtight over ordinary-text quality.
 ## START HERE: complementary models (next session)
 
 **State (2026-10-22).** Branch `audit-fixes`, local only, never pushed (head `9e15964`), with
-96 tests passing. The seed sweep and causal attribution are done and written up in
-**`docs/toy-sweep-results.md`**. That doc is written in the owner's voice, so keep the style
+96 tests passing (103 after the 10-28 build below). The seed sweep and causal attribution are
+done and written up in **`docs/toy-sweep-results.md`**. That doc is written in the owner's voice, so keep the style
 when editing it (first person, plain wording, Australian spelling). The owner edits docs as
 they go: commit write-ups straight away. Sweep in short (CMP 43:00, 3.4 h, every gate passed):
 - **Transfer:** both directions in 5 of 6 pairs (97.5-99.5%, chance ~10%). r1's A-from-B
@@ -40,32 +40,37 @@ above). Today the links only transfer when a task forces it (split recall), and 
 saw the same text. Give each model knowledge the other lacks, train the links on ordinary
 text only, and see whether transfer happens because it helps.
 
-**Design (agreed in outline with the owner; details still open):**
-1. **Per-model data mix.** `MixedSampler` (`blammoe/toy/corpus.py`) splits non-recall windows
-   50/50 prose/code for every model. Add a field to `ToyModelSpec` (`blammoe/toy/config.py`),
-   e.g. `p_prose: float = 0.5`, where 0.5 reproduces every existing run. Thread it through
-   `setup.sampler` into `scripts/toy_train.py`. Then: A (char) `p_prose: 0.1` = mostly code,
-   B (BPE) `p_prose: 0.9` = mostly prose. Test that 0.5 draws exactly as before.
-2. **Open choices to settle first:**
-   - Keep recall docs in pretraining (`p_recall`)? Keeping them keeps the models comparable
-     to the sweep.
-   - Fit B's BPE on B's own mix (more realistic) or the shared mix?
-   - Which mix strength: start at 0.1/0.9, and later run the dose-response 0.5 → 0.1 →
-     disjoint files (Next steps 3).
-3. **Links trained on ordinary text only:** a variant with `p_split: 0` in `fused` (check
-   that `mixed_draw` handles 0), both the expert bus and the residual stream, `safe_mask` on,
-   char bias, every layer, 3000 steps. Every checkpoint must pass `scripts/toy_fused_audit.py`.
-4. **Per-domain eval (new code).** `general_bpc` / `general_eval_set` mix prose and code.
-   Add separate prose-only and code-only test sets (`setup.texts(cfg, "test")`) and report
-   bits/char for each model:
-   - fused vs solo vs shuffled partner, per domain;
-   - the plain ensemble per domain.
-
-   **Success:** A improves on prose and/or B on code versus solo, and beats the shuffled
-   partner, while staying fine alone (frozen, so automatic).
-5. **Controls:** a same-domain partner (A with another code-heavy model) as the capacity
-   control. If GPU time allows, 3 seeds with the sweep runner (`configs/toy_sweep.yaml`
-   `overrides`, new `out_dir`).
+**Built (2026-10-28), not yet run.** The owner settled the open choices: keep recall docs
+in pretraining (`p_recall: 0.5`), fit B's BPE on B's own mix, start at 0.1/0.9 (dose-response
+later). 103 tests pass. Everything lives in **`configs/toy_complement.yaml`** (sweep runner):
+1. **Per-model data mix:** `ToyModelSpec.p_prose` (default 0.5 = draws bit-for-bit as before;
+   `test_p_prose_half_draws_exactly_as_before_the_field_existed` pins a fingerprint of the old
+   sampler). A (char) `p_prose: 0.1` = mostly code, B (BPE) `0.9` = mostly prose. The BPE
+   cache name gets `_p<mix>` when the mix is not 0.5 (`setup.bpe_name`), so each mix gets its
+   own BPE; the sweep fits each once in its root.
+2. **Links on ordinary text only:** a variant may set `p_split` (overrides `fused.p_split`).
+   The config adds `ab_experts_all_rel_safe_text` / `ab_resid_all_rel_safe_text` (the sweep's
+   leak-proof pair with `p_split: 0.0`) via `overrides`, so `toy_poc.yaml` and the old sweep's
+   unit configs are untouched. `hide: false` (attribution is on split recall, never trained here;
+   split recall is still evaluated, so spontaneous transfer would show).
+3. **Per-domain eval:** `domain_eval_sets` (48 prose + 48 code test windows, seed 778).
+   `toy_fused.py` writes `domain: {prose|code: {fused, shuffled_partner, solo}}` with per-doc
+   `[bits, chars]` rows; the audit gate now also checks those windows; the ensemble job adds
+   per-domain `ensemble_bits`. `summary.json` gives per domain and model the bits/char with CIs
+   and paired `fused_minus_solo` / `fused_minus_shuffled` (negative = the partner helps).
+   **Success:** A's prose (m1) and/or B's code (m2) beat solo and the shuffled partner.
+4. **Controls** (`controls:` in the sweep config, units `c<i>` / `d<i>`, kind `control:<name>`):
+   `c` keeps s_i's A and pretrains B again on A's mix (0.1) = a same-size, same-architecture
+   partner that knows code; `d` keeps s_i's B with a prose-heavy A (0.9). A's prose gain in s_i
+   should beat its gain in c_i (and B's code gain in s_i beat d_i).
+5. **Run order:** seed 0 first (`s0 c0 d0`, est. ~1.5 h on 43:00: 4 pretrains, 6 fusions,
+   3 audits), then `s1 s2 c1 c2 d1 d2` if it looks worth it. First:
+   `udisksctl mount -b /dev/nvme0n1p2`, `mkdir -p /media/boz/Data/blammoe/results/toy_complement`,
+   `ln -s /media/boz/Data/blammoe/results/toy_complement results/toy_complement`. Then in tmux:
+   `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. .venv/bin/python
+   scripts/toy_sweep.py configs/toy_complement.yaml 4 s0 c0 d0 2>&1 | tee results/toy_complement/sweep.log`.
+   ALWAYS set `CUDA_VISIBLE_DEVICES`: torch's default order is fastest-first, so without it
+   device 0 is the CMP at 42:00 (a CPU smoke on 10-28 landed there by accident).
 6. **Encouraging transfer (later variants):**
    - the stage-2 reward (`scripts/toy_fused_reward.py`, Next steps 4);
    - a JEPA-style extra loss where the links predict the partner's expert outputs from their
@@ -78,9 +83,8 @@ it first (`udisksctl mount -b /dev/nvme0n1p2`). The root disk has ~4.7 GB free. 
 43:00: one pretrain 4-6 min, one fusion ~8 min, an audit of 2 variants ~7 min, hide ~8 min.
 
 **Prompt for the next session:**
-> Resume BLaMMoE: read docs/HANDOFF.md "START HERE". Build the complementary-models
-> experiment (per-model data mix, links on ordinary text only, per-domain eval), with tests,
-> then tell me before running it on the CMP at 43:00.
+> Resume BLaMMoE: read docs/HANDOFF.md "START HERE". The complementary-models experiment is
+> built (configs/toy_complement.yaml); tell me before running s0 c0 d0 on the CMP at 43:00.
 
 ## Audit fixes (background)
 

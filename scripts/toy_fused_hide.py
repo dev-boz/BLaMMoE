@@ -112,7 +112,7 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> int:
         for arm, abl in arms.items():
             print(f"-- recovery fine-tune '{arm}': hide A {fmt(abl[0].hide)} from B, B {fmt(abl[1].hide)} from A, "
                   f"{hs.finetune_steps} steps", flush=True)
-            ft, r = recovery_finetune(pair, abl, tok_a, tok_b, mixed_draw(*setup.texts(cfg, "train"), L, fs.p_split, seed=4242),
+            ft, r = recovery_finetune(pair, abl, tok_a, tok_b, mixed_draw(*setup.texts(cfg, "train"), L, v.get("p_split", fs.p_split), seed=4242),
                                       splits, L, steps=hs.finetune_steps, batch_size=fs.batch_size, lr=hs.lr,
                                       answer_weight=fs.answer_weight, warmup=hs.finetune_warmup,
                                       log=lambda m: print("   ", m, flush=True))

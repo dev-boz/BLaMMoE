@@ -28,18 +28,25 @@ def texts(cfg: ToyPOCConfig, split: str) -> tuple[str, str]:
     return _texts(split, cfg.val_share, cfg.test_share)
 
 
-def sampler(cfg: ToyPOCConfig, split: str, seed: int) -> MixedSampler:
-    return MixedSampler(*texts(cfg, split), cfg.seq_chars, cfg.p_recall, seed=seed)
+def sampler(cfg: ToyPOCConfig, split: str, seed: int, p_prose: float = 0.5) -> MixedSampler:
+    return MixedSampler(*texts(cfg, split), cfg.seq_chars, cfg.p_recall, seed=seed, p_prose=p_prose)
+
+
+def bpe_name(spec: ToyModelSpec, cfg: ToyPOCConfig) -> str:
+    """The BPE cache file for ``spec``. The name carries the split (a cache from before M6 was
+    fitted on held-out text too) and, unless it is 0.5, the model's prose share: a model's BPE
+    is fitted on that model's own mix."""
+    mix = "" if spec.p_prose == 0.5 else f"_p{spec.p_prose:g}"
+    return f"bpe{spec.bpe_vocab}_train_v{cfg.val_share:g}_t{cfg.test_share:g}{mix}.json"
 
 
 def tokenizer(spec: ToyModelSpec, cfg: ToyPOCConfig):
     if spec.tokenizer == "char":
         return CharTokenizer()
-    # the name carries the split: a cache from before M6 was fitted on held-out text too
-    path = Path(cfg.out_dir) / f"bpe{spec.bpe_vocab}_train_v{cfg.val_share:g}_t{cfg.test_share:g}.json"
+    path = Path(cfg.out_dir) / bpe_name(spec, cfg)
     if path.exists():
         return BPETokenizer.load(path)
-    s = sampler(cfg, "train", seed=12345)
+    s = sampler(cfg, "train", seed=12345, p_prose=spec.p_prose)
     tok = BPETokenizer.train([s.sample().text for _ in range(4000)], spec.bpe_vocab)
     path.parent.mkdir(parents=True, exist_ok=True)
     tok.save(path)

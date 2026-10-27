@@ -15,7 +15,7 @@ import torch
 from blammoe.toy.batching import Batch, make_batch
 from blammoe.toy.corpus import MixedSampler, Sample, split_recall_sample
 from blammoe.toy.fused import (
-    NO_ABLATION, BusAblation, FusedPair, bits_per_char, char_predictions, first_char_matrix, pair_loss, run_pair,
+    NO_ABLATION, BusAblation, FusedPair, bits_per_char, bits_per_doc, char_predictions, first_char_matrix, pair_loss, run_pair,
     subset_accuracy,
 )
 from blammoe.toy.moe import lr_at
@@ -128,12 +128,52 @@ def general_eval_set(prose: str, code: str, L: int, n: int = 48, seed: int = 777
     return [gs.sample() for _ in range(n)]
 
 
-def general_bpc(pair: FusedPair, docs, tok1, tok2, L: int, **kw) -> dict:
+def domain_eval_sets(prose: str, code: str, L: int, n: int = 48, seed: int = 778) -> dict[str, list[Sample]]:
+    """Prose-only and code-only windows (pass one split's texts, normally test), for per-domain
+    bits/char: with models trained on different mixes, a gain on the domain a model saw little
+    of is what partner knowledge looks like."""
+    gs = MixedSampler(prose, code, L, p_recall=0.0, seed=seed)
+    return {k: [gs.sample(k) for _ in range(n)] for k in ("prose", "code")}
+
+
+def general_bpc(pair: FusedPair, docs, tok1, tok2, L: int, per_doc: bool = False, **kw) -> dict:
+    """``per_doc``: also [bits, chars] per document (``bits_per_doc``), for bootstrapping."""
     dev = device_of(pair)
     g1, g2 = make_batch(docs, tok1, L, device=dev), make_batch(docs, tok2, L, device=dev)
     with torch.no_grad():
         o1, o2 = run_pair(pair, g1, g2, **kw)
-    return {"m1_bpc": bits_per_char(o1, g1), "m2_bpc": bits_per_char(o2, g2)}
+    out = {"m1_bpc": bits_per_char(o1, g1), "m2_bpc": bits_per_char(o2, g2)}
+    if per_doc:
+        out["per_doc"] = {"m1_bpc": bits_per_doc(o1, g1), "m2_bpc": bits_per_doc(o2, g2)}
+    return out
+
+
+def _solo_char_preds(pair: FusedPair, samples_1, samples_2, tok1, tok2, L: int):
+    """Both SOLO models' next-character distributions ({(doc, chars read): probs})."""
+    dev = device_of(pair)
+    chars = CharTokenizer().itos[1:]
+    M1, M2 = first_char_matrix(tok1, chars), first_char_matrix(tok2, chars)
+    b1 = make_batch(samples_1, tok1, L, device=dev)
+    b2 = make_batch(samples_2, tok2, L, device=dev)
+    with torch.no_grad():
+        o1, o2 = run_pair(pair, b1, b2, disabled=frozenset(int(k) for k in pair.links))
+    return char_predictions(o1, b1, M1), char_predictions(o2, b2, M2)
+
+
+def ensemble_bits(pair: FusedPair, docs, tok1, tok2, L: int) -> dict:
+    """Bits/char of model 1 alone, model 2 alone and their 50/50 next-character mixture on
+    ``docs``, at the positions where both tokenizers have a boundary (``shared_positions``)."""
+    dev = device_of(pair)
+    col = {c: j for j, c in enumerate(CharTokenizer().itos[1:])}
+    p1, p2 = _solo_char_preds(pair, docs, docs, tok1, tok2, L)
+    texts = [d.text for d in docs]
+    keys = [k for k in p1 if k in p2 and k[1] < len(texts[k[0]]) and texts[k[0]][k[1]] in col]
+    y = torch.tensor([col[texts[i][e]] for i, e in keys], device=dev)
+    P1 = torch.stack([p1[k] for k in keys])
+    P2 = torch.stack([p2[k] for k in keys])
+    bits = lambda P: float(-(P.gather(1, y[:, None]).clamp_min(1e-12)).log2().mean())  # noqa: E731
+    return {"shared_positions": len(keys), "bits": {"m1_solo": bits(P1), "m2_solo": bits(P2),
+                                                    "mixture": bits(0.5 * (P1 + P2))}}
 
 
 def ensemble_baseline(pair: FusedPair, docs, splits, tok1, tok2, L: int) -> dict:
@@ -145,29 +185,11 @@ def ensemble_baseline(pair: FusedPair, docs, splits, tok1, tok2, L: int) -> dict
     The mixture combines OUTPUTS; the fusion claim is about information entering a
     model's own computation, so this is a reference point, not a competitor on recall."""
     dev = device_of(pair)
-    chars = CharTokenizer().itos[1:]
-    col = {c: j for j, c in enumerate(chars)}
-    M1, M2 = first_char_matrix(tok1, chars), first_char_matrix(tok2, chars)
-    off = frozenset(int(k) for k in pair.links)
+    col = {c: j for j, c in enumerate(CharTokenizer().itos[1:])}
+    g = ensemble_bits(pair, docs, tok1, tok2, L)
+    res = {"general_shared_positions": g["shared_positions"], "general_bits": g["bits"]}
 
-    def solo_preds(samples_1, samples_2):
-        b1 = make_batch(samples_1, tok1, L, device=dev)
-        b2 = make_batch(samples_2, tok2, L, device=dev)
-        with torch.no_grad():
-            o1, o2 = run_pair(pair, b1, b2, disabled=off)
-        return char_predictions(o1, b1, M1), char_predictions(o2, b2, M2)
-
-    p1, p2 = solo_preds(docs, docs)
-    texts = [d.text for d in docs]
-    keys = [k for k in p1 if k in p2 and k[1] < len(texts[k[0]]) and texts[k[0]][k[1]] in col]
-    y = torch.tensor([col[texts[i][e]] for i, e in keys], device=dev)
-    P1 = torch.stack([p1[k] for k in keys])
-    P2 = torch.stack([p2[k] for k in keys])
-    bits = lambda P: float(-(P.gather(1, y[:, None]).clamp_min(1e-12)).log2().mean())  # noqa: E731
-    res = {"general_shared_positions": len(keys), "general_bits": {
-        "m1_solo": bits(P1), "m2_solo": bits(P2), "mixture": bits(0.5 * (P1 + P2))}}
-
-    q1, q2 = solo_preds([s.view("a") for s in splits], [s.view("b") for s in splits])
+    q1, q2 = _solo_char_preds(pair, [s.view("a") for s in splits], [s.view("b") for s in splits], tok1, tok2, L)
     need = [(i, c) for i, s in enumerate(splits) for c in s.partner_answers("a")]
     # model-1's answer char c is predicted at chars_read == c
     keys = [(i, c) for i, c in need if (i, c) in q1 and (i, c) in q2]

@@ -140,11 +140,20 @@ def load_code(split: str, val_share: float, test_share: float, max_chars: int = 
 
 
 class MixedSampler:
-    """Fixed-length samples drawn from recall / prose / code with given weights."""
+    """Fixed-length samples drawn from recall / prose / code with given weights: ``p_recall``
+    recall, then ``p_prose`` of the rest prose and the remainder code. ``p_prose`` = 0.5 draws
+    exactly as before the field existed (same rng calls, same thresholds)."""
 
-    def __init__(self, prose: str, code: str, length: int, p_recall: float = 0.5, seed: int = 0):
+    def __init__(self, prose: str, code: str, length: int, p_recall: float = 0.5, seed: int = 0,
+                 p_prose: float = 0.5):
         self.prose, self.code, self.length, self.p_recall = prose, code, length, p_recall
+        self.p_prose = p_prose
         self.rng = random.Random(seed)
+
+    def _prose_cut(self) -> float:
+        if self.p_prose == 0.5:  # the pre-p_prose threshold, kept bit-for-bit
+            return (1 + self.p_recall) / 2
+        return self.p_recall + (1 - self.p_recall) * self.p_prose
 
     def _window(self, src: str, kind: str) -> Sample:
         i = self.rng.randrange(0, len(src) - self.length)
@@ -154,7 +163,7 @@ class MixedSampler:
     def sample(self, kind: str | None = None) -> Sample:
         if kind is None:
             r = self.rng.random()
-            kind = "recall" if r < self.p_recall else ("prose" if r < (1 + self.p_recall) / 2 else "code")
+            kind = "recall" if r < self.p_recall else ("prose" if r < self._prose_cut() else "code")
         if kind == "recall":
             return recall_sample(self.rng, self.length)
         return self._window(self.prose if kind == "prose" else self.code, kind)

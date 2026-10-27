@@ -6,6 +6,9 @@ results/toy_poc, so every single-run script works on it unchanged:
 * main unit ``s<i>``: A_i (char) with B_i (BPE), seeds from ``seeds[i]``. The cross-family stand-in.
 * Rung-2 unit ``r<i>``: B_{i+1} (as ``model_a``) with B_i. Same architecture, tokenizer and data,
   different seed: the friendliest partner. Its models are copies of the main units' B models.
+* control unit ``<name><i>`` (``controls``): one of s_i's models kept (copied), the other pretrained
+  again with ``override`` on top, e.g. B trained on A's data mix: a partner of the same size and
+  architecture that knows the same domain, so a gain over it is not just extra capacity.
 
 scripts/toy_sweep.py runs the units; this module builds their configs and reads their results
 back. Every split-recall number is on the seed-2025 eval set, so per-document rows from different
@@ -35,6 +38,7 @@ class SweepConfig:
     rung2: bool = True  # also fuse B_{i+1} with B_i
     rung2_variants: list = field(default_factory=lambda: ["ab_experts_all_rel_safe", "ab_resid_all_rel_safe"])
     hide: bool = True  # attribution controls (scripts/toy_fused_hide.py) on every experts variant
+    controls: list = field(default_factory=list)  # [{name, keep: model_a|model_b, override: {...}}], see units()
     overrides: dict = field(default_factory=dict)  # deep-merged into the base YAML (e.g. short smoke runs)
 
     @classmethod
@@ -52,10 +56,10 @@ def deep_merge(base: dict, over: dict) -> dict:
 @dataclass
 class Unit:
     name: str
-    kind: str  # "main" | "rung2"
+    kind: str  # "main" | "rung2" | "control:<name>" (across_seeds groups units by kind)
     cfg: dict  # a full toy_poc-style config with this unit's out_dir and seeds
     variants: list
-    copy_models: dict = field(default_factory=dict)  # rung2: {"model_a.pt": source path, ...}
+    copy_models: dict = field(default_factory=dict)  # copied, not pretrained: {"model_a.pt": source path, ...}
 
     @property
     def out(self) -> Path:
@@ -63,7 +67,7 @@ class Unit:
 
 
 def units(sc: SweepConfig, base: dict) -> list[Unit]:
-    """Main units first: Rung-2 units copy their models from them."""
+    """Main units first: Rung-2 and control units copy models from them."""
     base = deep_merge(base, sc.overrides)
     root = Path(sc.out_dir)
     out = []
@@ -78,6 +82,13 @@ def units(sc: SweepConfig, base: dict) -> list[Unit]:
                                     "model_b": {**b, "seed": sb}})
             out.append(Unit(f"r{i}", "rung2", cfg, list(sc.rung2_variants),
                             {"model_a.pt": root / f"s{j}" / "model_b.pt", "model_b.pt": root / f"s{i}" / "model_b.pt"}))
+    for c in sc.controls:
+        if c["keep"] not in ("model_a", "model_b") or set(c["override"]) != {"model_a", "model_b"} - {c["keep"]}:
+            raise ValueError(f"control {c['name']}: keep one model and override only the other, got {c}")
+        for i, main in enumerate(out[: len(sc.seeds)]):
+            cfg = deep_merge(main.cfg, {**c["override"], "out_dir": str(root / f"{c['name']}{i}")})
+            out.append(Unit(f"{c['name']}{i}", f"control:{c['name']}", cfg, list(sc.variants),
+                            {f"{c['keep']}.pt": main.out / f"{c['keep']}.pt"}))
     return out
 
 
@@ -101,6 +112,8 @@ def variant_summary(out: Path, variant: str) -> dict | None:
         return None
     sp = fused["split"]
     res = {"split": {}, "general": fused["general"]}
+    if "domain" in fused:
+        res["domain"] = domain_summary(fused["domain"])
     for cond in ("fused", "shuffled_partner", "solo"):
         pd = sp[cond].get("per_doc")
         res["split"][cond] = {k: _split(sp[cond], pd, k) for k in NEEDS}
@@ -114,6 +127,22 @@ def variant_summary(out: Path, variant: str) -> dict | None:
     if hide:
         res["attribution"] = attribution(hide)
     return res
+
+
+def domain_summary(domain: dict) -> dict:
+    """Per domain (prose / code) and model: bits/char fused, with a shuffled partner and solo, each
+    with a bootstrap CI over documents, and the paired differences fused minus solo and fused minus
+    shuffled partner. Negative = the fused model needs fewer bits, i.e. the partner helps."""
+    out = {}
+    for d, r in domain.items():
+        out[d] = {}
+        for m in ("m1_bpc", "m2_bpc"):
+            rows = {cond: r[cond]["per_doc"][m] for cond in ("fused", "shuffled_partner", "solo")}
+            ci = {cond: bootstrap_ci(x) for cond, x in rows.items()}
+            out[d][m] = {**{cond: {"bpc": c["acc"], "lo": c["lo"], "hi": c["hi"]} for cond, c in ci.items()},
+                         "fused_minus_solo": paired_bootstrap_diff(rows["fused"], rows["solo"]),
+                         "fused_minus_shuffled": paired_bootstrap_diff(rows["fused"], rows["shuffled_partner"])}
+    return out
 
 
 def attribution(hide: dict) -> dict:
@@ -175,6 +204,12 @@ def across_seeds(summaries: dict[str, dict], kind: str) -> dict:
                 for k, x in ks.items():
                     for m in ("acc", "exact"):
                         d.setdefault(f"{cond}/{k}/{m}", []).append(x[m])
+            for dom, ms in r.get("domain", {}).items():
+                for m, x in ms.items():
+                    for cond in ("fused", "shuffled_partner", "solo"):
+                        d.setdefault(f"domain/{dom}/{m}/{cond}", []).append(x[cond]["bpc"])
+                    for diff in ("fused_minus_solo", "fused_minus_shuffled"):
+                        d.setdefault(f"domain/{dom}/{m}/{diff}", []).append(x[diff]["diff"])
             for k, a in r.get("attribution", {}).items():
                 if isinstance(a, dict):
                     for m in ("hide_chosen", "blank_chosen", "tags_shift", "hide_attention"):

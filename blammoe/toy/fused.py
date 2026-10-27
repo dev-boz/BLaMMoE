@@ -317,6 +317,13 @@ def bits_per_char(logits: torch.Tensor, batch: Batch) -> float:
     return float(nll) / chars / math.log(2)
 
 
+def bits_per_doc(logits: torch.Tensor, batch: Batch) -> list[list[float]]:
+    """``bits_per_char`` per document as [bits, chars] rows: pooled over documents (sum of bits
+    / sum of chars, as ``blammoe.stats`` pools) they give ``bits_per_char`` back."""
+    nll = F.cross_entropy(logits.transpose(1, 2), batch.targets, ignore_index=-100, reduction="none").sum(1)
+    return [[float(b) / math.log(2), full[-1][1] - full[0][1]] for b, full in zip(nll, batch.full_offsets)]
+
+
 # --------------------------------------------------------------------------- diversity of thinking
 def first_char_matrix(tokenizer, chars: list[str]) -> torch.Tensor:
     """[V, C] maps each token to its first character, so any tokenizer's next-token

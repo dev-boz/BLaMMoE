@@ -19,7 +19,7 @@ from blammoe.toy import setup
 from blammoe.toy.config import ToyPOCConfig
 from blammoe.toy.fused import FusedPair
 from blammoe.toy.fused_train import (
-    general_bpc, general_eval_set, mixed_draw, split_eval_set, split_scores, train_fused,
+    domain_eval_sets, general_bpc, general_eval_set, mixed_draw, split_eval_set, split_scores, train_fused,
 )
 from blammoe.toy.moe import load
 
@@ -52,21 +52,27 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
 
     n_params = sum(p.numel() for p in pair.bridge_parameters())
     log(f"variant {variant} {v}: {n_params:,} bridge params on {device}")
-    history = train_fused(pair, t1, t2, mixed_draw(*setup.texts(cfg, "train"), L, fs.p_split, seed=4242 + fs.seed), L,
+    history = train_fused(pair, t1, t2, mixed_draw(*setup.texts(cfg, "train"), L, v.get("p_split", fs.p_split),
+                                                         seed=4242 + fs.seed), L,
                           steps=v.get("steps", fs.steps), batch_size=fs.batch_size, lr=fs.lr,
                           answer_weight=fs.answer_weight, log=log)
 
     # ---------------- evaluation (held-out seeds)
     splits = split_eval_set(L)
     gen = general_eval_set(*setup.texts(cfg, "test"), L)
+    domains = domain_eval_sets(*setup.texts(cfg, "test"), L)
     all_links = frozenset(int(k) for k in pair.links)
     split_eval = lambda **kw: split_scores(pair, splits, t1, t2, L, **kw)  # noqa: E731
-    gen_eval = lambda **kw: general_bpc(pair, gen, t1, t2, L, **kw)  # noqa: E731
+    gen_eval = lambda docs=gen, **kw: general_bpc(pair, docs, t1, t2, L, **kw)  # noqa: E731
     res = {"variant": variant, "spec": v, "bridge_params": n_params, "train": history,
            "split": {"fused": split_eval(per_doc=True), "shuffled_partner": split_eval(partner_roll=1, per_doc=True),
                      "solo": split_eval(disabled=all_links, per_doc=True)},  # per_doc: bootstrap CIs (toy_sweep)
            "general": {"fused": gen_eval(), "shuffled_partner": gen_eval(partner_roll=1),
-                       "solo": gen_eval(disabled=all_links)}}
+                       "solo": gen_eval(disabled=all_links)},
+           # per document for bootstrap CIs; a gain on the domain a model saw little of = partner knowledge
+           "domain": {d: {"fused": gen_eval(docs, per_doc=True),
+                          "shuffled_partner": gen_eval(docs, partner_roll=1, per_doc=True),
+                          "solo": gen_eval(docs, disabled=all_links, per_doc=True)} for d, docs in domains.items()}}
     if len(all_links) > 1:
         res["split"]["only_link"] = {l: split_eval(disabled=all_links - {l}) for l in sorted(all_links)}
         res["split"]["without_link"] = {l: split_eval(disabled=frozenset({l})) for l in sorted(all_links)}
@@ -80,6 +86,9 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
             log(f"split {k}: {fmt(r)}")
     for k, r in res["general"].items():
         log(f"general {k}: " + " ".join(f"{n}={x:.4f}" for n, x in r.items()))
+    for d, rd in res["domain"].items():
+        for k, r in rd.items():
+            log(f"{d} {k}: " + " ".join(f"{n}={x:.4f}" for n, x in r.items() if n != "per_doc"))
     (out / f"fused_{variant}.json").write_text(json.dumps(res, indent=1, default=str))
     torch.save(pair.links.state_dict(), out / f"fused_{variant}.pt")
     log("done")

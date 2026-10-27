@@ -19,6 +19,7 @@ class ToyModelSpec:
     top_k: int = 2
     d_expert: int = 256
     seed: int = 0
+    p_prose: float = 0.5  # prose share of the non-recall pretraining windows (and of the BPE fit); 0.5 = every run before it
 
 
 @dataclass
@@ -43,7 +44,7 @@ class FusedSpec:
     answer_weight: float = 1.0
     d_bus: int = 64
     n_heads: int = 4
-    p_split: float = 0.5  # share of split-view recall samples (rest: prose/code, both see it)
+    p_split: float = 0.5  # share of split-view recall samples (rest: prose/code, both see it); a variant may override
     seed: int = 0  # bridge init and training-draw order (0 = every run before the sweep's r1 retry)
     variants: dict = field(default_factory=dict)
 

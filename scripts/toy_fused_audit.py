@@ -3,7 +3,8 @@
 For each variant, both models' full-text log-probs are compared with prefix-honest
 re-runs (each position sees only the chars it has read; blammoe.toy.audit.causality_gate)
 at EVERY scored position of the evaluation windows the results are reported on: the 96
-split-recall windows (each model its own view) and the 48 ordinary-text windows. Expert
+split-recall windows (each model its own view), the 48 ordinary-text windows and the 48 + 48
+prose-only / code-only windows (``domain_eval_sets``). Expert
 variants are also checked under the bus ablations the attribution controls use (one expert
 hidden, one blanked, every tag shifted: scripts/toy_fused_hide.py). Any position
 differing by more than ``tol`` fails the variant; the exit code is nonzero if any fails.
@@ -30,7 +31,7 @@ from blammoe.toy import setup
 from blammoe.toy.audit import causality_gate
 from blammoe.toy.config import ToyPOCConfig
 from blammoe.toy.fused import BusAblation, FusedPair
-from blammoe.toy.fused_train import general_eval_set, split_eval_set
+from blammoe.toy.fused_train import domain_eval_sets, general_eval_set, split_eval_set
 from blammoe.toy.moe import load
 
 DEFAULT = ["ab_experts_all_rel_safe", "ab_resid_all_rel_safe"]
@@ -47,6 +48,8 @@ def main(cfg_path: str, threads: int = 4, *variants: str) -> int:
     B, _ = load(out / "model_b.pt", device)
     docs = {"split": [(s.view_a, s.view_b) for s in split_eval_set(L)],
             "general": [(d.text, d.text) for d in general_eval_set(*setup.texts(cfg, "test"), L)]}
+    for dom, dd in domain_eval_sets(*setup.texts(cfg, "test"), L).items():
+        docs[dom] = [(d.text, d.text) for d in dd]
     report, failed = {}, []
     for name in variants or DEFAULT:
         v = fs.variants[name]

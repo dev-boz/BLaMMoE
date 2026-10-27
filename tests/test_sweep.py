@@ -1,4 +1,5 @@
 import json
+import pytest
 
 from blammoe.toy.sweep import SweepConfig, across_seeds, deep_merge, unit_summary, units
 
@@ -108,3 +109,67 @@ def test_fused_seed_override_reaches_the_unit_config(tmp_path):
     [s0] = units(SweepConfig(out_dir=str(tmp_path), seeds=[[0, 1]], overrides={"fused": {"seed": 1}}), BASE)
     assert _from_dict(ToyPOCConfig, s0.cfg).fused.seed == 1
     assert _from_dict(ToyPOCConfig, BASE).fused.seed == 0  # default: the pre-retry runs
+
+
+CONTROLS = [{"name": "c", "keep": "model_a", "override": {"model_b": {"p_prose": 0.1}}},
+            {"name": "d", "keep": "model_b", "override": {"model_a": {"p_prose": 0.9}}}]
+
+
+def test_control_units_keep_one_main_model_and_retrain_the_other(tmp_path):
+    sc = SweepConfig(out_dir=str(tmp_path), seeds=[[0, 1], [2, 3]], variants=["e"], rung2=False,
+                     controls=CONTROLS, overrides={"model_a": {"p_prose": 0.1}, "model_b": {"p_prose": 0.9}})
+    us = {u.name: u for u in units(sc, BASE)}
+    assert list(us) == ["s0", "s1", "c0", "c1", "d0", "d1"]
+    s1, c1, d0 = us["s1"], us["c1"], us["d0"]
+    assert (s1.cfg["model_a"]["p_prose"], s1.cfg["model_b"]["p_prose"]) == (0.1, 0.9)
+    assert c1.kind == "control:c" and c1.variants == ["e"] and c1.cfg["out_dir"] == str(tmp_path / "c1")
+    assert c1.cfg["model_a"] == s1.cfg["model_a"]  # copied from s1, so the same spec
+    assert c1.cfg["model_b"] == {**s1.cfg["model_b"], "p_prose": 0.1}  # B again, same seed, on A's mix
+    assert c1.copy_models == {"model_a.pt": tmp_path / "s1" / "model_a.pt"}
+    assert d0.cfg["model_a"] == {**us["s0"].cfg["model_a"], "p_prose": 0.9}
+    assert d0.copy_models == {"model_b.pt": tmp_path / "s0" / "model_b.pt"}
+    bad = SweepConfig(out_dir=str(tmp_path), seeds=[[0, 1]], controls=[{**CONTROLS[0], "keep": "model_b"}])
+    with pytest.raises(ValueError):
+        units(bad, BASE)  # keeping B while overriding B is not a control
+
+
+def _domain(fused_bits: float) -> dict:
+    """2 documents of 100 chars per condition, every document at the same bits/char."""
+    rows = lambda b: [[100 * b, 100]] * 2  # noqa: E731
+    cond = lambda b: {"m1_bpc": b, "m2_bpc": b + 1, "per_doc": {"m1_bpc": rows(b), "m2_bpc": rows(b + 1)}}  # noqa: E731
+    return {"fused": cond(fused_bits), "shuffled_partner": cond(2.0), "solo": cond(2.5)}
+
+
+def test_domain_summary_and_its_seed_aggregate(tmp_path):
+    sc = SweepConfig(out_dir=str(tmp_path), seeds=[[0, 1], [2, 3]], variants=["e", "r"], rung2=False)
+    us = units(sc, BASE)
+    for u, b in zip(us, (1.5, 2.1)):
+        _write_unit(u.out, 1.0, True)
+        f = json.loads((u.out / "fused_e.json").read_text())
+        f["domain"] = {"prose": _domain(b), "code": _domain(2.5)}
+        (u.out / "fused_e.json").write_text(json.dumps(f))
+    d = unit_summary(us[0])["variants"]["e"]["domain"]
+    p = d["prose"]["m1_bpc"]
+    assert p["fused"] == {"bpc": 1.5, "lo": 1.5, "hi": 1.5} and p["solo"]["bpc"] == 2.5
+    assert p["fused_minus_solo"]["diff"] == -1.0 and p["fused_minus_shuffled"]["diff"] == -0.5
+    assert d["prose"]["m2_bpc"]["fused"]["bpc"] == 2.5 and d["code"]["m1_bpc"]["fused_minus_solo"]["diff"] == 0.0
+    assert "domain" not in unit_summary(us[0])["variants"]["r"]  # results from before per-domain eval
+    agg = across_seeds({u.name: unit_summary(u) for u in us}, "main")["e"]
+    assert abs(agg["domain/prose/m1_bpc/fused_minus_solo"]["mean"] - -0.7) < 1e-9
+    assert agg["domain/prose/m1_bpc/solo"]["n_seeds"] == 2
+
+
+def test_bpe_files_one_per_data_mix_fitted_once_in_the_sweep_root(tmp_path, monkeypatch):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import toy_sweep
+    from blammoe.toy.tokenizers import BPETokenizer
+    fits, real_train = [], BPETokenizer.train.__func__
+    monkeypatch.setattr(BPETokenizer, "train", classmethod(lambda cls, t, v: fits.append(1) or real_train(cls, t[:50], v)))
+    sc = SweepConfig(out_dir=str(tmp_path), seeds=[[0, 1], [2, 3]], variants=["e"], rung2=True, controls=CONTROLS[:1],
+                     overrides={"model_a": {"p_prose": 0.1}, "model_b": {"p_prose": 0.9}})
+    files = {u.name: [p.name for p in toy_sweep.bpe_files(u, tmp_path)] for u in units(sc, BASE)}
+    p9, p1 = "bpe1024_train_v0.1_t0.1_p0.9.json", "bpe1024_train_v0.1_t0.1_p0.1.json"
+    assert files == {"s0": [p9], "s1": [p9], "r0": [p9, p9], "r1": [p9, p9], "c0": [p1], "c1": [p1]}
+    assert len(fits) == 2 and sorted(p.name for p in tmp_path.glob("bpe*.json")) == [p1, p9]
