@@ -55,7 +55,7 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
     history = train_fused(pair, t1, t2, mixed_draw(*setup.texts(cfg, "train"), L, v.get("p_split", fs.p_split),
                                                          seed=4242 + fs.seed), L,
                           steps=v.get("steps", fs.steps), batch_size=fs.batch_size, lr=fs.lr,
-                          answer_weight=fs.answer_weight, log=log)
+                          answer_weight=fs.answer_weight, reward_lam=v.get("reward_lam", 0.0), log=log)
 
     # ---------------- evaluation (held-out seeds)
     splits = split_eval_set(L)

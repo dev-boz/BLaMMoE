@@ -1,0 +1,25 @@
+# The encourage dial (dial 2, next to configs/toy_dial.yaml's force dial): new translators on the
+# complementary models from configs/toy_complement.yaml (copied, not retrained), ordinary text only
+# (p_split 0, nothing forced), with a growing reward on partner-dependent wins: tokens the fusion
+# gets right that the model alone and the model with a wrong-document partner both get wrong count
+# 1 + reward_lam in the loss (blammoe/toy/reward.py). reward_lam 0 = toy_complement's experts run,
+# same models, data stream and init. HANDOFF: lam 2 did nothing as stage 2, a ~100x win weight
+# wrecked accuracy; 5/15/50 spans that. Expert bus only. Read the same numbers as the force dial.
+base: configs/toy_poc.yaml
+out_dir: results/toy_dial_reward  # symlink to the Data drive
+models_from: results/toy_complement
+seeds: [[0, 1], [2, 3], [4, 5]]
+variants: [ab_experts_all_rel_safe_lam5, ab_experts_all_rel_safe_lam15, ab_experts_all_rel_safe_lam50]
+rung2: false
+hide: false
+controls:                         # must match toy_complement.yaml (the models are copied from there)
+  - {name: c, keep: model_a, override: {model_b: {p_prose: 0.1}}}
+  - {name: d, keep: model_b, override: {model_a: {p_prose: 0.9}}}
+overrides:
+  model_a: {p_prose: 0.1}
+  model_b: {p_prose: 0.9}
+  fused:
+    variants:
+      ab_experts_all_rel_safe_lam5:  {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.0, reward_lam: 5.0}
+      ab_experts_all_rel_safe_lam15: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.0, reward_lam: 15.0}
+      ab_experts_all_rel_safe_lam50: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.0, reward_lam: 50.0}

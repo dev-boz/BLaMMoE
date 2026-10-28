@@ -32,6 +32,7 @@ import torch.nn.functional as F
 from blammoe.adapters import RxAdapter, TxAdapter
 from blammoe.toy.batching import Batch, answer_positions, answer_runs
 from blammoe.toy.moe import ToyMoELM
+from blammoe.toy.reward import win_weighted_loss
 
 NEVER = 10**9  # end-char for padding: unreadable as a writer
 
@@ -272,8 +273,15 @@ def run_pair(pair: "FusedPair", batch_a: Batch, batch_b: Batch, **kw):
 
 
 # --------------------------------------------------------------------------- loss / eval
-def pair_loss(logits: torch.Tensor, batch: Batch, answer_weight: float = 0.0) -> torch.Tensor:
-    loss = F.cross_entropy(logits.flatten(0, 1), batch.targets.flatten(), ignore_index=-100)
+def pair_loss(
+    logits: torch.Tensor, batch: Batch, answer_weight: float = 0.0, wins: torch.Tensor | None = None, lam: float = 0.0,
+) -> torch.Tensor:
+    """Mean next-token CE, plus ``answer_weight`` x the CE on recall answers. ``lam`` > 0: the
+    ``wins`` tokens (partner-dependent, blammoe/toy/reward.py) count 1 + lam in the mean."""
+    if lam:
+        loss = win_weighted_loss(logits, batch.targets, wins, lam)
+    else:
+        loss = F.cross_entropy(logits.flatten(0, 1), batch.targets.flatten(), ignore_index=-100)
     if answer_weight:
         m = torch.zeros_like(batch.targets, dtype=torch.bool)
         for i, pos in enumerate(batch.answer_pos):

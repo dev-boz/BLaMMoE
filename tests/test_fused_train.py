@@ -5,13 +5,14 @@ import torch
 
 from blammoe.toy.corpus import Sample, recall_sample, split_recall_sample
 from blammoe.toy.batching import make_batch
-from blammoe.toy.fused import BusAblation, FusedPair, expert_output_means
+from blammoe.toy.fused import BusAblation, FusedPair, expert_output_means, pair_loss
 from blammoe.toy.fused_train import (
     causal_chosen, chosen_experts, domain_eval_sets, ensemble_baseline, ensemble_bits, general_bpc, hide_ablation,
     mixed_draw, recovery_finetune, split_eval_set, split_scores,
     train_fused,
 )
 from blammoe.toy.moe import ToyMoEConfig, ToyMoELM
+from blammoe.toy.reward import win_weighted_loss
 from blammoe.toy.tokenizers import BPETokenizer, CharTokenizer
 
 L = 100
@@ -199,3 +200,29 @@ def test_ordinary_text_only_links_and_per_domain_eval():
     assert e["shared_positions"] > 0 and set(e["bits"]) == {"m1_solo", "m2_solo", "mixture"}
     base = ensemble_baseline(pair, docs, split_eval_set(L, n=2, seed=6), ta, tb, L)
     assert base["general_bits"] == e["bits"] and base["general_shared_positions"] == e["shared_positions"]
+
+
+def test_reward_lam_counts_partner_wins_and_logs_their_share():
+    """The reward dial: win tokens count 1 + lam in pair_loss (on top of the recall-answer term),
+    lam 0 is the plain loss, and train_fused logs the win share. Untrained gates are 0, so the
+    fusion equals solo at step 0: no wins yet, the same loss as lam 0."""
+    ta = CharTokenizer()
+    for s in (mixed_draw(PROSE, CODE, L, 0.0, seed=4)(1)[0][0], split_recall_sample(random.Random(3), L).view("a")):
+        b = make_batch([s], ta, L)
+        logits = torch.randn(*b.targets.shape, ta.vocab_size)
+        wins = b.targets != -100
+        wins[:, ::2] = False
+        assert torch.equal(pair_loss(logits, b, 1.0, wins, 0.0), pair_loss(logits, b, 1.0))
+        extra = pair_loss(logits, b, 1.0, wins, 3.0) - pair_loss(logits, b, 1.0)
+        assert torch.isclose(extra, win_weighted_loss(logits, b.targets, wins, 3.0)
+                             - win_weighted_loss(logits, b.targets, wins, 0.0), atol=1e-6)
+        assert extra > 0
+
+    runs = {}
+    for lam in (0.0, 5.0):
+        pair, ta, tb = pair_and_toks()
+        runs[lam] = train_fused(pair, ta, tb, mixed_draw(PROSE, CODE, L, 0.0, seed=3), L, steps=3, batch_size=2,
+                                lr=1e-2, answer_weight=0.0, log=lambda m: None, log_every=1, reward_lam=lam)
+    assert all("win_rate" not in r for r in runs[0.0])
+    assert all(len(r["win_rate"]) == 2 and all(0 <= w <= 1 for w in r["win_rate"]) for r in runs[5.0])
+    assert runs[5.0][0]["win_rate"] == [0.0, 0.0] and runs[5.0][0]["loss"] == runs[0.0][0]["loss"]

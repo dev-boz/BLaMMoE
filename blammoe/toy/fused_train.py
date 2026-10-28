@@ -19,6 +19,7 @@ from blammoe.toy.fused import (
     subset_accuracy,
 )
 from blammoe.toy.moe import lr_at
+from blammoe.toy.reward import partner_win_mask
 from blammoe.toy.tokenizers import CharTokenizer
 
 
@@ -49,13 +50,17 @@ def mixed_draw(prose: str, code: str, L: int, p_split: float, seed: int):
 def train_fused(
     pair: FusedPair, tok1, tok2, draw: Callable, L: int, *, steps: int, batch_size: int, lr: float,
     answer_weight: float, log: Callable[[str], None] = print, log_every: int = 100, warmup: int = 0,
-    **run_kw,
+    reward_lam: float = 0.0, **run_kw,
 ) -> list[dict]:
     """``warmup`` > 0: linear warmup then cosine decay (for links that are already trained:
-    a fresh Adam's first full-size steps knock them off). ``run_kw`` go to every forward,
-    e.g. ``ablate`` to train with an expert hidden."""
+    a fresh Adam's first full-size steps knock them off). ``reward_lam`` > 0: tokens the fusion
+    gets right only because of the partner (alone and with a wrong-document partner both miss,
+    blammoe/toy/reward.py) count 1 + reward_lam in the CE mean; the log adds their share
+    (``win_rate``, per model). ``run_kw`` go to every forward, e.g. ``ablate`` to train with an
+    expert hidden."""
     dev = device_of(pair)
     opt = torch.optim.AdamW(pair.bridge_parameters(), lr=lr, weight_decay=0.0)
+    all_links = frozenset(int(k) for k in pair.links)
     history = []
     for step in range(steps):
         if warmup:
@@ -65,7 +70,14 @@ def train_fused(
         b1 = make_batch([x for x, _ in items], tok1, L, device=dev)
         b2 = make_batch([y for _, y in items], tok2, L, device=dev)
         l1, l2 = run_pair(pair, b1, b2, **run_kw)
-        loss = pair_loss(l1, b1, answer_weight) + pair_loss(l2, b2, answer_weight)
+        wins = (None, None)
+        if reward_lam:
+            with torch.no_grad():
+                s1, s2 = run_pair(pair, b1, b2, disabled=all_links, **run_kw)
+                w1, w2 = run_pair(pair, b1, b2, partner_roll=1, **run_kw)
+            wins = partner_win_mask(l1, s1, w1, b1.targets), partner_win_mask(l2, s2, w2, b2.targets)
+        loss = (pair_loss(l1, b1, answer_weight, wins[0], reward_lam)
+                + pair_loss(l2, b2, answer_weight, wins[1], reward_lam))
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
@@ -73,6 +85,9 @@ def train_fused(
             gates = {k: [round(float(torch.tanh(lk.rx_a.gate.detach())), 3),
                          round(float(torch.tanh(lk.rx_b.gate.detach())), 3)] for k, lk in pair.links.items()}
             rec = {"step": step, "loss": round(float(loss.detach()), 4), "gates": gates}
+            if reward_lam:
+                rec["win_rate"] = [round(float(w.sum() / (b.targets != -100).sum()), 4)
+                                   for w, b in zip(wins, (b1, b2))]
             history.append(rec)
             log(str(rec))
     pair.eval()

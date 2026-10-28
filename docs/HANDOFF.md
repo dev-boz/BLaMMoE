@@ -24,8 +24,20 @@ airtight over ordinary-text quality.
 unforced, every seed, 4-7x the same-domain control; A (code-heavy) gets no prose through the expert
 bus and a little through the residual stream; untrained split recall B-needs-A 10-34%. **Next (owner,
 10-28):** a dial between "allows" (p_split 0, this run) and "forces" (the sweep) transfer, with
-rewards or otherwise, to find a good balance. Design being agreed with the owner; see the write-up's
-"Where to next". The section below is the build log of the complementary-models experiment.
+rewards or otherwise, to find a good balance. The section below is the build log of the
+complementary-models experiment.
+
+**Dials (built 2026-10-28), both on the toy_complement models (`models_from`, copied, not retrained),
+expert bus, same s/c/d units:**
+1. Force: `configs/toy_dial.yaml`, p_split 0.05 / 0.15 / 0.5. **Running 10-28 23:20** on both CMPs
+   (tmux dial42 = `s0 c0 d0 s2`, dial43 = `s1 c1 d1 c2 d2`, logs `results/toy_dial/sweep_4{2,3}.log`).
+   Both processes write summary.json: rebuild it after with `CUDA_VISIBLE_DEVICES="" ... toy_sweep.py
+   configs/toy_dial.yaml 4 none`.
+2. Encourage: `configs/toy_dial_reward.yaml`, variant `reward_lam` 5 / 15 / 50 at p_split 0 (train_fused
+   `reward_lam`: partner-dependent win tokens count 1 + lam, blammoe/toy/reward.py). lam 0 = the
+   toy_complement experts run (same data stream and init). Not run; needs a `results/toy_dial_reward`
+   symlink to the Data drive first. Training is ~1.4x slower per step (two extra no-grad forwards).
+Read per setting: B's code gain and A's prose gain vs the c/d controls, split recall, strong-domain costs.
 
 ### Complementary models (built and run 2026-10-28)
 
