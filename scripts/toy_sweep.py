@@ -146,6 +146,10 @@ def main(sweep_path: str, threads: int = 4, *only: str) -> int:
     all_units = units(sc, base)
     root = Path(sc.out_dir)
     root.mkdir(parents=True, exist_ok=True)
+    if sc.models_from:  # the copied models' token ids must match the BPE they were trained with
+        for bpe in Path(sc.models_from).glob("bpe*.json"):
+            if not (root / bpe.name).exists():
+                shutil.copyfile(bpe, root / bpe.name)
     bpes = {u.name: bpe_files(u, root) for u in all_units}
     names = sorted({b.name for bs in bpes.values() for b in bs})
     log(f"{len(all_units)} units in {root} on {pick_device()}, {threads} threads; BPE {', '.join(names)}")

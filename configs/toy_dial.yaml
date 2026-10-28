@@ -1,0 +1,25 @@
+# The allow/force dial (HANDOFF "START HERE"): new translators on the complementary models from
+# configs/toy_complement.yaml (copied, not retrained), with a growing share of forced transfer in
+# training. p_split = share of training windows that are split-view recall (each model must get
+# half the answers from its partner); the rest is ordinary text. 0 = allowed only (toy_complement),
+# 0.5 = the toy sweep's mix. Expert bus only: it is the channel the end goal is about.
+# Read per p_split: B's code gain and A's prose gain vs the c/d controls (unforced transfer),
+# split recall (forced transfer), and the cost on each model's strong domain.
+base: configs/toy_poc.yaml
+out_dir: results/toy_dial         # symlink to the Data drive
+models_from: results/toy_complement
+seeds: [[0, 1], [2, 3], [4, 5]]
+variants: [ab_experts_all_rel_safe_split05, ab_experts_all_rel_safe_split15, ab_experts_all_rel_safe_split50]
+rung2: false
+hide: false
+controls:                         # must match toy_complement.yaml (the models are copied from there)
+  - {name: c, keep: model_a, override: {model_b: {p_prose: 0.1}}}
+  - {name: d, keep: model_b, override: {model_a: {p_prose: 0.9}}}
+overrides:
+  model_a: {p_prose: 0.1}
+  model_b: {p_prose: 0.9}
+  fused:
+    variants:
+      ab_experts_all_rel_safe_split05: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.05}
+      ab_experts_all_rel_safe_split15: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.15}
+      ab_experts_all_rel_safe_split50: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.5}

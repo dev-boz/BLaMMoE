@@ -173,3 +173,32 @@ def test_bpe_files_one_per_data_mix_fitted_once_in_the_sweep_root(tmp_path, monk
     p9, p1 = "bpe1024_train_v0.1_t0.1_p0.9.json", "bpe1024_train_v0.1_t0.1_p0.1.json"
     assert files == {"s0": [p9], "s1": [p9], "r0": [p9, p9], "r1": [p9, p9], "c0": [p1], "c1": [p1]}
     assert len(fits) == 2 and sorted(p.name for p in tmp_path.glob("bpe*.json")) == [p1, p9]
+
+
+def test_models_from_copies_every_units_models_and_bpe_from_another_sweep(tmp_path, monkeypatch):
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import toy_sweep
+    from blammoe.toy.tokenizers import BPETokenizer
+    old = tmp_path / "old"
+    sc = SweepConfig(out_dir=str(tmp_path / "new"), seeds=[[0, 1]], variants=["e"], rung2=False, controls=CONTROLS[:1],
+                     models_from=str(old), overrides={"model_b": {"p_prose": 0.9}})
+    us = {u.name: u for u in units(sc, BASE)}
+    assert us["s0"].copy_models == {"model_a.pt": old / "s0" / "model_a.pt", "model_b.pt": old / "s0" / "model_b.pt"}
+    assert us["c0"].copy_models == {"model_a.pt": old / "c0" / "model_a.pt", "model_b.pt": old / "c0" / "model_b.pt"}
+    # the old sweep's BPE is reused, never refitted (token ids must match the copied models)
+    old.mkdir()
+    (old / "bpe1024_train_v0.1_t0.1_p0.9.json").write_text("{}")
+    monkeypatch.setattr(BPETokenizer, "load", classmethod(lambda cls, p: "loaded"))
+    monkeypatch.setattr(BPETokenizer, "train", classmethod(lambda cls, t, v: (_ for _ in ()).throw(AssertionError("refit"))))
+    monkeypatch.setattr(toy_sweep, "run_unit", lambda u, bpes, threads, hide: [])
+    monkeypatch.setattr(toy_sweep, "unit_summary", lambda u: None)
+    sc_path = tmp_path / "dial.yaml"
+    import yaml
+    base_path = tmp_path / "base.yaml"
+    base_path.write_text(yaml.safe_dump(BASE))
+    sc_path.write_text(yaml.safe_dump({"base": str(base_path), "out_dir": sc.out_dir, "seeds": [[0, 1]], "variants": ["e"],
+                                       "rung2": False, "models_from": str(old), "overrides": sc.overrides}))
+    toy_sweep.main(str(sc_path), 1, "none")
+    assert (Path(sc.out_dir) / "bpe1024_train_v0.1_t0.1_p0.9.json").read_text() == "{}"

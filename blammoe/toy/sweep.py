@@ -39,6 +39,7 @@ class SweepConfig:
     rung2_variants: list = field(default_factory=lambda: ["ab_experts_all_rel_safe", "ab_resid_all_rel_safe"])
     hide: bool = True  # attribution controls (scripts/toy_fused_hide.py) on every experts variant
     controls: list = field(default_factory=list)  # [{name, keep: model_a|model_b, override: {...}}], see units()
+    models_from: str = ""  # another sweep's out_dir: copy every unit's models (and the BPE files) from there
     overrides: dict = field(default_factory=dict)  # deep-merged into the base YAML (e.g. short smoke runs)
 
     @classmethod
@@ -67,7 +68,9 @@ class Unit:
 
 
 def units(sc: SweepConfig, base: dict) -> list[Unit]:
-    """Main units first: Rung-2 and control units copy models from them."""
+    """Main units first: Rung-2 and control units copy models from them. With ``models_from``,
+    every unit copies both models from the unit of the same name there instead (new translators
+    on already-trained models; the overrides must match that sweep's model settings)."""
     base = deep_merge(base, sc.overrides)
     root = Path(sc.out_dir)
     out = []
@@ -89,6 +92,9 @@ def units(sc: SweepConfig, base: dict) -> list[Unit]:
             cfg = deep_merge(main.cfg, {**c["override"], "out_dir": str(root / f"{c['name']}{i}")})
             out.append(Unit(f"{c['name']}{i}", f"control:{c['name']}", cfg, list(sc.variants),
                             {f"{c['keep']}.pt": main.out / f"{c['keep']}.pt"}))
+    if sc.models_from:
+        for u in out:
+            u.copy_models = {f"{m}.pt": Path(sc.models_from) / u.name / f"{m}.pt" for m in ("model_a", "model_b")}
     return out
 
 
