@@ -56,7 +56,7 @@ B is the prose model, so code is its weak domain. Change in B's bits per charact
 |---|---|---|---|---|---|
 | 0 | 2.132 | **-0.132** | -0.024 | **-0.256** | -0.032 |
 | 1 | 2.150 | **-0.109** | -0.025 | **-0.138** | -0.082 |
-| 2 | 2.107 | **-0.127** | -0.017 | **-0.165** | -0.053 |
+| 2 | 2.107 | **-0.126** | -0.016 | **-0.165** | -0.053 |
 
 The real partner beats the control in all 6 runs, and the 95% confidence intervals (bootstrapped over 48 test documents) don't overlap in any of them. On the expert bus the real partner is worth 4-7 times what the control partner is. The best run (seed 0, residual) closes almost half the gap between B's code (2.13) and A's own code (1.58).
 

@@ -17,7 +17,11 @@ are a bonus. Mixing e.g. a Qwen with a Mistral and getting a *worse* result stil
 success. So prioritise work that makes "information transfers, and it travels via experts"
 airtight over ordinary-text quality.
 
-## START HERE: an allow/force dial (next session)
+## START HERE: the reward dial (next session)
+
+**10-29:** force dial (dial 1 below) done and written up, `docs/toy-dial-results.md`. Next = run dial 2
+(reward, built and CPU-smoked, ~1.2x dial 1's GPU time, ask the owner first), and/or fix the force
+dial's answer weighting and rerun its low shares.
 
 **DONE 2026-10-28: complementary models**, 3 seeds (s/c/d units, 18/18 gates PASS), written up in
 **`docs/toy-complement-results.md`** (owner's voice). Short version: B (prose-heavy) learns code from A
@@ -29,10 +33,12 @@ complementary-models experiment.
 
 **Dials (built 2026-10-28), both on the toy_complement models (`models_from`, copied, not retrained),
 expert bus, same s/c/d units:**
-1. Force: `configs/toy_dial.yaml`, p_split 0.05 / 0.15 / 0.5. **Running 10-28 23:20** on both CMPs
-   (tmux dial42 = `s0 c0 d0 s2`, dial43 = `s1 c1 d1 c2 d2`, logs `results/toy_dial/sweep_4{2,3}.log`).
-   Both processes write summary.json: rebuild it after with `CUDA_VISIBLE_DEVICES="" ... toy_sweep.py
-   configs/toy_dial.yaml 4 none`.
+1. Force: `configs/toy_dial.yaml`, p_split 0.05 / 0.15 / 0.5. **DONE 10-29, written up in
+   `docs/toy-dial-results.md`.** Not a usable dial as the loss stands: `pair_loss`'s answer term
+   averages over the batch's answer tokens only, so one answer token weighs ~146x / 78x / 21x an
+   ordinary one at 0.05 / 0.15 / 0.5. Any forcing switched B's free code transfer off (fully in
+   seeds 0, 2); recall is on/off per seed. Fix before rerunning: answer tokens count 1 + w inside the
+   overall token mean (new option, keep the old path for old configs).
 2. Encourage: `configs/toy_dial_reward.yaml`, variant `reward_lam` 5 / 15 / 50 at p_split 0 (train_fused
    `reward_lam`: partner-dependent win tokens count 1 + lam, blammoe/toy/reward.py). lam 0 = the
    toy_complement experts run (same data stream and init). Not run; needs a `results/toy_dial_reward`
@@ -219,7 +225,8 @@ the write-ups.
 
 | doc | what |
 |---|---|
-| **`docs/toy-complement-results.md`** | **Newest.** 2026-10-28 complementary models, 3 seeds + same-domain controls: B learns code from A unforced (6/6, 4-7x control); A gets no prose via the expert bus, some via the residual stream (2/3). |
+| **`docs/toy-dial-results.md`** | **Newest.** 2026-10-29 force dial (p_split 0.05/0.15/0.5 on the complementary models, 27/27 gates PASS): any forcing switches B's free code transfer off (2 of 3 seeds fully); forced recall is on/off, not graded; cause = the answer term weighs each answer token 21-146x. |
+| **`docs/toy-complement-results.md`** | 2026-10-28 complementary models, 3 seeds + same-domain controls: B learns code from A unforced (6/6, 4-7x control); A gets no prose via the expert bus, some via the residual stream (2/3). |
 | **`docs/toy-sweep-results.md`** | **Current numbers.** The 2026-10-21 seed sweep: 3 cross-family + 3 same-design pairs, CIs, causal attribution, residual baseline, ensemble. Where older docs disagree, this wins. |
 | `docs/toy-poc-results.md` | One-way: A's expert → B (linear transplant 96.5%, learned bridge 92%), depth/expert/data ablations. Unaffected by the leak (B reading char-level A cannot leak). |
 | `docs/toy-fusion-results.md` | Two-way fused pair, translator expert choice, depth, stage-2 fine-tuning, **the audit** (banner at top) and the **leak-proof results** (section at the end). |
