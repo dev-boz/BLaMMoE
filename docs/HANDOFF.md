@@ -17,7 +17,17 @@ are a bonus. Mixing e.g. a Qwen with a Mistral and getting a *worse* result stil
 success. So prioritise work that makes "information transfers, and it travels via experts"
 airtight over ordinary-text quality.
 
-## START HERE: complementary models (next session)
+## START HERE: an allow/force dial (next session)
+
+**DONE 2026-10-28: complementary models**, 3 seeds (s/c/d units, 18/18 gates PASS), written up in
+**`docs/toy-complement-results.md`** (owner's voice). Short version: B (prose-heavy) learns code from A
+unforced, every seed, 4-7x the same-domain control; A (code-heavy) gets no prose through the expert
+bus and a little through the residual stream; untrained split recall B-needs-A 10-34%. **Next (owner,
+10-28):** a dial between "allows" (p_split 0, this run) and "forces" (the sweep) transfer, with
+rewards or otherwise, to find a good balance. Design being agreed with the owner; see the write-up's
+"Where to next". The section below is the build log of the complementary-models experiment.
+
+### Complementary models (built and run 2026-10-28)
 
 **State (2026-10-22).** Branch `audit-fixes`, local only, never pushed (head `9e15964`), with
 96 tests passing (103 after the 10-28 build below). The seed sweep and causal attribution are
@@ -197,6 +207,7 @@ the write-ups.
 
 | doc | what |
 |---|---|
+| **`docs/toy-complement-results.md`** | **Newest.** 2026-10-28 complementary models, 3 seeds + same-domain controls: B learns code from A unforced (6/6, 4-7x control); A gets no prose via the expert bus, some via the residual stream (2/3). |
 | **`docs/toy-sweep-results.md`** | **Current numbers.** The 2026-10-21 seed sweep: 3 cross-family + 3 same-design pairs, CIs, causal attribution, residual baseline, ensemble. Where older docs disagree, this wins. |
 | `docs/toy-poc-results.md` | One-way: A's expert → B (linear transplant 96.5%, learned bridge 92%), depth/expert/data ablations. Unaffected by the leak (B reading char-level A cannot leak). |
 | `docs/toy-fusion-results.md` | Two-way fused pair, translator expert choice, depth, stage-2 fine-tuning, **the audit** (banner at top) and the **leak-proof results** (section at the end). |
