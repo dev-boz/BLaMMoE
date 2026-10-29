@@ -17,19 +17,14 @@ are a bonus. Mixing e.g. a Qwen with a Mistral and getting a *worse* result stil
 success. So prioritise work that makes "information transfers, and it travels via experts"
 airtight over ordinary-text quality.
 
-## START HERE: the reward dial (next session)
+## START HERE: after the dials (next session)
 
-**10-29:** force dial (dial 1 below) done and written up, `docs/toy-dial-results.md`. Next = run dial 2
-(reward, built and CPU-smoked, ~1.2x dial 1's GPU time, ask the owner first), and/or fix the force
-dial's answer weighting and rerun its low shares.
-
-**DONE 2026-10-28: complementary models**, 3 seeds (s/c/d units, 18/18 gates PASS), written up in
-**`docs/toy-complement-results.md`** (owner's voice). Short version: B (prose-heavy) learns code from A
-unforced, every seed, 4-7x the same-domain control; A (code-heavy) gets no prose through the expert
-bus and a little through the residual stream; untrained split recall B-needs-A 10-34%. **Next (owner,
-10-28):** a dial between "allows" (p_split 0, this run) and "forces" (the sweep) transfer, with
-rewards or otherwise, to find a good balance. The section below is the build log of the
-complementary-models experiment.
+**10-30: both dials done and written up** (`docs/toy-dial-results.md`, `docs/toy-dial2-results.md`).
+Best balance so far = fair forcing (`answer_in_mean`, answer_weight 20) at p_split 0.05: B<-A recall
+90-91% plus about half the free code transfer, at the unforced cost. The partner-win reward
+(`reward_lam`) is harmful at 5/15/50: probably rewards noise that depends on the partner, not
+knowledge. Next options (owner to pick): fair forcing at 0.01-0.02; a smooth reward (real-partner
+log-prob gain over several wrong partners); why the expert bus never carries prose to A.
 
 **Dials (built 2026-10-28), both on the toy_complement models (`models_from`, copied, not retrained),
 expert bus, same s/c/d units:**
@@ -44,8 +39,8 @@ expert bus, same s/c/d units:**
    blammoe/toy/reward.py; lam 0 = the toy_complement experts run, same data stream and init), and
    `*_split05_tok` / `*_split15_tok`: p_split 0.05 / 0.15 with `answer_in_mean` (answer tokens count
    1 + 20 inside the token mean, ~ the 21x the old 0.5 runs had). Reward training is ~1.4x slower per
-   step (two extra no-grad forwards). **Launched 10-29** on both CMPs (tmux dial2_42 / dial2_43, guard
-   tmux dial2guard kills both at core >= 80C / HBM >= 88C).
+   step (two extra no-grad forwards). **DONE 10-30** (5.8 h / 7.4 h on the two CMPs, guard
+   `~/cmp-tests/dial2-guard.sh` never tripped, peaks 50C core / 59C HBM).
 Read per setting: B's code gain and A's prose gain vs the c/d controls, split recall, strong-domain costs.
 
 ### Complementary models (built and run 2026-10-28)
@@ -228,7 +223,8 @@ the write-ups.
 
 | doc | what |
 |---|---|
-| **`docs/toy-dial-results.md`** | **Newest.** 2026-10-29 force dial (p_split 0.05/0.15/0.5 on the complementary models, 27/27 gates PASS): any forcing switches B's free code transfer off (2 of 3 seeds fully); forced recall is on/off, not graded; cause = the answer term weighs each answer token 21-146x. |
+| **`docs/toy-dial2-results.md`** | **Newest.** 2026-10-30 dial part 2 (45/45 gates PASS): fair force weighting (answer_in_mean, w 20) at p_split 0.05 keeps ~half of B's free code transfer (-0.050 vs control, 3/3 seeds) AND B<-A recall 90-91%, no extra cost; the partner-win reward hurts at every lam (5/15/50). |
+| **`docs/toy-dial-results.md`** | 2026-10-29 force dial (p_split 0.05/0.15/0.5 on the complementary models, 27/27 gates PASS): any forcing switches B's free code transfer off (2 of 3 seeds fully); forced recall is on/off, not graded; cause = the answer term weighs each answer token 21-146x. |
 | **`docs/toy-complement-results.md`** | 2026-10-28 complementary models, 3 seeds + same-domain controls: B learns code from A unforced (6/6, 4-7x control); A gets no prose via the expert bus, some via the residual stream (2/3). |
 | **`docs/toy-sweep-results.md`** | **Current numbers.** The 2026-10-21 seed sweep: 3 cross-family + 3 same-design pairs, CIs, causal attribution, residual baseline, ensemble. Where older docs disagree, this wins. |
 | `docs/toy-poc-results.md` | One-way: A's expert → B (linear transplant 96.5%, learned bridge 92%), depth/expert/data ablations. Unaffected by the leak (B reading char-level A cannot leak). |

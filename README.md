@@ -76,6 +76,8 @@ bootstrap statistics, a hardware probe, and a toy end-to-end programme:
   same-domain control partners): [`docs/toy-complement-results.md`](docs/toy-complement-results.md).
 - The allow/force dial, part 1 (a growing share of forced recall on the complementary models):
   [`docs/toy-dial-results.md`](docs/toy-dial-results.md).
+- The dial, part 2 (the partner-win reward, and the force dial with fair answer weighting):
+  [`docs/toy-dial2-results.md`](docs/toy-dial2-results.md).
 
 The real-model work packages (WP1 loader, WP2 collection, WP3, WP7-WP11) are specified
 in the work plan and intentionally **not** stubbed.
