@@ -1,15 +1,20 @@
-# The encourage dial (dial 2, next to configs/toy_dial.yaml's force dial): new translators on the
+# Dial 2: the encourage dial, plus the force dial rerun with fair answer weighting. New translators on the
 # complementary models from configs/toy_complement.yaml (copied, not retrained), ordinary text only
 # (p_split 0, nothing forced), with a growing reward on partner-dependent wins: tokens the fusion
 # gets right that the model alone and the model with a wrong-document partner both get wrong count
 # 1 + reward_lam in the loss (blammoe/toy/reward.py). reward_lam 0 = toy_complement's experts run,
 # same models, data stream and init. HANDOFF: lam 2 did nothing as stage 2, a ~100x win weight
 # wrecked accuracy; 5/15/50 spans that. Expert bus only. Read the same numbers as the force dial.
+# The *_tok variants rerun configs/toy_dial.yaml's low shares with answer tokens counting 1 + 20 inside
+# the token mean (answer_in_mean): toy_dial's answer term weighed each answer ~146x / 78x an ordinary
+# token at 0.05 / 0.15 and ~21x at 0.5 (docs/toy-dial-results.md), so 20 keeps 0.5's push and makes the
+# low shares proportionally gentler.
 base: configs/toy_poc.yaml
-out_dir: results/toy_dial_reward  # symlink to the Data drive
+out_dir: results/toy_dial2         # symlink to the Data drive
 models_from: results/toy_complement
 seeds: [[0, 1], [2, 3], [4, 5]]
-variants: [ab_experts_all_rel_safe_lam5, ab_experts_all_rel_safe_lam15, ab_experts_all_rel_safe_lam50]
+variants: [ab_experts_all_rel_safe_lam5, ab_experts_all_rel_safe_lam15, ab_experts_all_rel_safe_lam50,
+           ab_experts_all_rel_safe_split05_tok, ab_experts_all_rel_safe_split15_tok]
 rung2: false
 hide: false
 controls:                         # must match toy_complement.yaml (the models are copied from there)
@@ -23,3 +28,5 @@ overrides:
       ab_experts_all_rel_safe_lam5:  {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.0, reward_lam: 5.0}
       ab_experts_all_rel_safe_lam15: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.0, reward_lam: 15.0}
       ab_experts_all_rel_safe_lam50: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.0, reward_lam: 50.0}
+      ab_experts_all_rel_safe_split05_tok: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.05, answer_weight: 20.0, answer_in_mean: true}
+      ab_experts_all_rel_safe_split15_tok: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.15, answer_weight: 20.0, answer_in_mean: true}

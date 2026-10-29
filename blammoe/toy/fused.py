@@ -273,21 +273,41 @@ def run_pair(pair: "FusedPair", batch_a: Batch, batch_b: Batch, **kw):
 
 
 # --------------------------------------------------------------------------- loss / eval
+def answer_mask(batch: Batch) -> torch.Tensor:
+    """[B, T] bool: the recall-answer target positions."""
+    m = torch.zeros_like(batch.targets, dtype=torch.bool)
+    for i, pos in enumerate(batch.answer_pos):
+        m[i, pos] = True
+    return m
+
+
 def pair_loss(
     logits: torch.Tensor, batch: Batch, answer_weight: float = 0.0, wins: torch.Tensor | None = None, lam: float = 0.0,
+    answer_in_mean: bool = False,
 ) -> torch.Tensor:
     """Mean next-token CE, plus ``answer_weight`` x the CE on recall answers. ``lam`` > 0: the
-    ``wins`` tokens (partner-dependent, blammoe/toy/reward.py) count 1 + lam in the mean."""
+    ``wins`` tokens (partner-dependent, blammoe/toy/reward.py) count 1 + lam in the mean.
+
+    The answer term is a mean over the batch's answer tokens alone, so when answers are rare each
+    one weighs ~n_tokens / n_answers (~146x an ordinary token at p_split 0.05, 21x at 0.5;
+    docs/toy-dial-results.md). ``answer_in_mean``: answer tokens count 1 + answer_weight inside
+    the one token mean instead, so the push scales with how many answers there are."""
+    m = answer_mask(batch) if answer_weight else None
+    if answer_in_mean:
+        ce = F.cross_entropy(logits.flatten(0, 1), batch.targets.flatten(), ignore_index=-100, reduction="none")
+        w = torch.ones_like(ce)
+        if m is not None:
+            w = w + answer_weight * m.flatten().float()
+        if lam:
+            w = w + lam * wins.flatten().float()
+        valid = (batch.targets != -100).flatten()
+        return (ce * w)[valid].sum() / valid.sum()
     if lam:
         loss = win_weighted_loss(logits, batch.targets, wins, lam)
     else:
         loss = F.cross_entropy(logits.flatten(0, 1), batch.targets.flatten(), ignore_index=-100)
-    if answer_weight:
-        m = torch.zeros_like(batch.targets, dtype=torch.bool)
-        for i, pos in enumerate(batch.answer_pos):
-            m[i, pos] = True
-        if m.any():
-            loss = loss + answer_weight * F.cross_entropy(logits[m], batch.targets[m])
+    if m is not None and m.any():
+        loss = loss + answer_weight * F.cross_entropy(logits[m], batch.targets[m])
     return loss
 
 

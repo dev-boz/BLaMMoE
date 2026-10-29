@@ -50,14 +50,14 @@ def mixed_draw(prose: str, code: str, L: int, p_split: float, seed: int):
 def train_fused(
     pair: FusedPair, tok1, tok2, draw: Callable, L: int, *, steps: int, batch_size: int, lr: float,
     answer_weight: float, log: Callable[[str], None] = print, log_every: int = 100, warmup: int = 0,
-    reward_lam: float = 0.0, **run_kw,
+    reward_lam: float = 0.0, answer_in_mean: bool = False, **run_kw,
 ) -> list[dict]:
     """``warmup`` > 0: linear warmup then cosine decay (for links that are already trained:
     a fresh Adam's first full-size steps knock them off). ``reward_lam`` > 0: tokens the fusion
     gets right only because of the partner (alone and with a wrong-document partner both miss,
     blammoe/toy/reward.py) count 1 + reward_lam in the CE mean; the log adds their share
-    (``win_rate``, per model). ``run_kw`` go to every forward, e.g. ``ablate`` to train with an
-    expert hidden."""
+    (``win_rate``, per model). ``answer_in_mean``: see fused.pair_loss. ``run_kw`` go to every
+    forward, e.g. ``ablate`` to train with an expert hidden."""
     dev = device_of(pair)
     opt = torch.optim.AdamW(pair.bridge_parameters(), lr=lr, weight_decay=0.0)
     all_links = frozenset(int(k) for k in pair.links)
@@ -76,8 +76,8 @@ def train_fused(
                 s1, s2 = run_pair(pair, b1, b2, disabled=all_links, **run_kw)
                 w1, w2 = run_pair(pair, b1, b2, partner_roll=1, **run_kw)
             wins = partner_win_mask(l1, s1, w1, b1.targets), partner_win_mask(l2, s2, w2, b2.targets)
-        loss = (pair_loss(l1, b1, answer_weight, wins[0], reward_lam)
-                + pair_loss(l2, b2, answer_weight, wins[1], reward_lam))
+        loss = (pair_loss(l1, b1, answer_weight, wins[0], reward_lam, answer_in_mean)
+                + pair_loss(l2, b2, answer_weight, wins[1], reward_lam, answer_in_mean))
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()

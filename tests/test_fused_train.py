@@ -5,7 +5,7 @@ import torch
 
 from blammoe.toy.corpus import Sample, recall_sample, split_recall_sample
 from blammoe.toy.batching import make_batch
-from blammoe.toy.fused import BusAblation, FusedPair, expert_output_means, pair_loss
+from blammoe.toy.fused import BusAblation, FusedPair, answer_mask, expert_output_means, pair_loss
 from blammoe.toy.fused_train import (
     causal_chosen, chosen_experts, domain_eval_sets, ensemble_baseline, ensemble_bits, general_bpc, hide_ablation,
     mixed_draw, recovery_finetune, split_eval_set, split_scores,
@@ -226,3 +226,28 @@ def test_reward_lam_counts_partner_wins_and_logs_their_share():
     assert all("win_rate" not in r for r in runs[0.0])
     assert all(len(r["win_rate"]) == 2 and all(0 <= w <= 1 for w in r["win_rate"]) for r in runs[5.0])
     assert runs[5.0][0]["win_rate"] == [0.0, 0.0] and runs[5.0][0]["loss"] == runs[0.0][0]["loss"]
+
+
+def test_answer_in_mean_weighs_each_answer_token_1_plus_w():
+    """Force-dial fix: with answer_in_mean an answer token counts 1 + answer_weight inside the one
+    token mean (so the push scales with how many answers there are), wins add lam on top, and
+    ordinary text (no answers) is the plain CE. The default path is the old loss."""
+    ta = CharTokenizer()
+    s = split_recall_sample(random.Random(3), L).view("a")
+    b = make_batch([s, mixed_draw(PROSE, CODE, L, 0.0, seed=4)(1)[0][0]], ta, L)
+    logits = torch.randn(*b.targets.shape, ta.vocab_size)
+    valid = b.targets != -100
+    ce = torch.nn.functional.cross_entropy(logits.flatten(0, 1), b.targets.flatten(), ignore_index=-100,
+                                           reduction="none").view_as(b.targets)
+    m = answer_mask(b)
+    assert m[0].sum() > 0 and m[1].sum() == 0
+    wins = valid.clone()
+    wins[:, 1::2] = False
+    want = (ce * (1 + 20 * m.float() + 3 * wins.float()))[valid].sum() / valid.sum()
+    assert torch.isclose(pair_loss(logits, b, 20.0, wins, 3.0, answer_in_mean=True), want)
+    plain = ce[valid].mean()
+    b2 = make_batch([mixed_draw(PROSE, CODE, L, 0.0, seed=4)(1)[0][0]], ta, L)
+    l2 = logits[1:]
+    assert torch.isclose(pair_loss(l2, b2, 20.0, answer_in_mean=True), pair_loss(l2, b2))
+    old = plain + 20 * torch.nn.functional.cross_entropy(logits[m], b.targets[m])
+    assert torch.isclose(pair_loss(logits, b, 20.0), old)

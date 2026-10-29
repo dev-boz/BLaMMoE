@@ -39,10 +39,13 @@ expert bus, same s/c/d units:**
    ordinary one at 0.05 / 0.15 / 0.5. Any forcing switched B's free code transfer off (fully in
    seeds 0, 2); recall is on/off per seed. Fix before rerunning: answer tokens count 1 + w inside the
    overall token mean (new option, keep the old path for old configs).
-2. Encourage: `configs/toy_dial_reward.yaml`, variant `reward_lam` 5 / 15 / 50 at p_split 0 (train_fused
-   `reward_lam`: partner-dependent win tokens count 1 + lam, blammoe/toy/reward.py). lam 0 = the
-   toy_complement experts run (same data stream and init). Not run; needs a `results/toy_dial_reward`
-   symlink to the Data drive first. Training is ~1.4x slower per step (two extra no-grad forwards).
+2. Encourage + fair force: `configs/toy_dial2.yaml`, out `results/toy_dial2`. Variants `reward_lam`
+   5 / 15 / 50 at p_split 0 (train_fused `reward_lam`: partner-dependent win tokens count 1 + lam,
+   blammoe/toy/reward.py; lam 0 = the toy_complement experts run, same data stream and init), and
+   `*_split05_tok` / `*_split15_tok`: p_split 0.05 / 0.15 with `answer_in_mean` (answer tokens count
+   1 + 20 inside the token mean, ~ the 21x the old 0.5 runs had). Reward training is ~1.4x slower per
+   step (two extra no-grad forwards). **Launched 10-29** on both CMPs (tmux dial2_42 / dial2_43, guard
+   tmux dial2guard kills both at core >= 80C / HBM >= 88C).
 Read per setting: B's code gain and A's prose gain vs the c/d controls, split recall, strong-domain costs.
 
 ### Complementary models (built and run 2026-10-28)
