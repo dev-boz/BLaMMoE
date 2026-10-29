@@ -1,8 +1,10 @@
-# Handoff — BLaMMoE, state as of 2026-10-22
+# Handoff — BLaMMoE, state as of 2026-10-30
 
 For whoever picks this up next, human or agent. Read `CLAUDE.md` first (working agreement).
 `main` has the toy programme (PR #1 merged). The audit fixes, the seed sweep and its write-up
-are on local branch **`audit-fixes`** (committed, not pushed).
+and everything since (complementary models, the allow/force dials) are on local branch
+**`audit-fixes`** (committed, NEVER pushed; don't push unless the owner asks). 106 tests pass:
+`CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python -m pytest -q` (the venv is `.venv`).
 
 ## Project goal (from the owner)
 
@@ -19,12 +21,67 @@ airtight over ordinary-text quality.
 
 ## START HERE: after the dials (next session)
 
-**10-30: both dials done and written up** (`docs/toy-dial-results.md`, `docs/toy-dial2-results.md`).
-Best balance so far = fair forcing (`answer_in_mean`, answer_weight 20) at p_split 0.05: B<-A recall
-90-91% plus about half the free code transfer, at the unforced cost. The partner-win reward
-(`reward_lam`) is harmful at 5/15/50: probably rewards noise that depends on the partner, not
-knowledge. Next options (owner to pick): fair forcing at 0.01-0.02; a smooth reward (real-partner
-log-prob gain over several wrong partners); why the expert bus never carries prose to A.
+**Prompt for the next session:**
+> Resume BLaMMoE: read docs/HANDOFF.md "START HERE" and docs/toy-dial2-results.md. Both dials are
+> done. Help me pick between (a) fair forcing at 0.01-0.02, (b) a smooth reward, (c) the A-side
+> prose gap. Ask before any GPU job; mount the Data drive first.
+
+**Where the programme is (2026-10-30), in the order it happened:**
+1. Toy sweep (`docs/toy-sweep-results.md`): a translator between two frozen toy MoEs moves
+   information through their experts when a task forces it (split recall 97-99%), not otherwise.
+2. Complementary models (`docs/toy-complement-results.md`): A pretrained mostly on code, B mostly
+   on prose, translator trained on ordinary text only. B learns code from A unforced, every seed,
+   4-7x a same-domain control partner. A gets no prose through the expert bus (a little through
+   the residual stream). This is the first evidence for "encourages" in the end goal.
+3. Force dial, part 1 (`docs/toy-dial-results.md`): mixing in a small share of forced recall
+   killed the free transfer. Cause: a loss bug. The answer term averaged over the batch's answer
+   tokens only, so one answer weighed 21-146x an ordinary character.
+4. Dial part 2 (`docs/toy-dial2-results.md`): with fair weighting (`answer_in_mean`, w 20),
+   p_split 0.05 keeps about half of B's free code transfer AND B<-A recall 90-91%, in all 3 seeds,
+   at the unforced cost = **best balance so far**. The partner-win reward (`reward_lam`) hurts at
+   every weight tried (5/15/50). Best guess: its argmax win mask with one wrong partner rewards
+   noise that depends on the partner, not knowledge.
+
+**Open problem for the end goal:** A never gets prose from B through the expert bus, at any
+setting. "Free transfer between experts" so far works one way only.
+
+**Next options (owner to pick; none agreed yet):**
+- (a) Fair forcing at p_split 0.01-0.02: does free transfer return towards unforced while recall
+  holds? Cheapest: a new config like `configs/toy_dial2.yaml` with only `*_tok` variants, new
+  out_dir (a changed config in an existing out_dir is refused), ~15 min GPU per variant per unit.
+- (b) A smooth reward: e.g. log p(target | real partner) minus the mean over several wrong
+  partners, as an extra loss term; no argmax, so noise shouldn't pass. Needs code in
+  blammoe/toy/reward.py + train_fused, with a test, then a dial config.
+- (c) The A-side gap: where B's prose knowledge lives (expert routing on prose vs code, how much
+  of B's prose advantage is experts vs attention), and a char-level prose-heavy partner for A to
+  rule the tokenizer in or out (needs a new control unit kind in blammoe/toy/sweep.py).
+
+**How runs work now (all from 10-28..10-30):**
+- Sweeps: `scripts/toy_sweep.py <cfg> 4 <units...>`. `models_from:` copies the complement models
+  (+ BPE) instead of pretraining, so dials compare like for like. Units: s = real pair, c = A with a
+  code-heavy B (control for A's prose gain), d = B with a prose-heavy A (control for B's code gain).
+- The owner has OK'd **both CMPs at once** for these sweeps (ask before each job anyway). Split
+  units 42:00 `s0 c0 d0 s2` / 43:00 `s1 c1 d1 c2 d2`, each in its own tmux, log via tee, ending with
+  `echo SWEEP-EXIT ${PIPESTATUS[0]}`. Both processes write summary.json, so afterwards rebuild it on
+  CPU with `CUDA_VISIBLE_DEVICES="" ... toy_sweep.py <cfg> 4 none`.
+- **Thermal guard (owner asked for one):** `~/cmp-tests/dial2-guard.sh <results dir>` in its own tmux.
+  It kills both sweeps at core >= 80C / HBM >= 88C / 3 failed nvidia-smi reads, and writes GUARD-KILL
+  into the sweep logs. The pkill pattern is hard-coded to `configs/toy_dial2.yaml` and the tmux
+  names to dial2_42/43: edit those for a new config. Test it first with `--dry-run` and
+  `CORE_MAX=30`. The always-on cmp-thermal-watch.service is the backstop. These loads peak ~50C.
+- Watching: ONE background Bash until-loop (sleep 30) that exits on both SWEEP-EXIT, GUARD-KILL,
+  Traceback|FAIL|xception, a log quiet > 20 min, or the guard tmux gone. Haiku watcher subagents
+  don't work here (sleep is blocked).
+- **Always pin the GPU**: `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1` (42:00) or `=2`
+  (43:00), and `CUDA_VISIBLE_DEVICES=""` for CPU work. Unpinned, torch picks a CMP on its own.
+- The Data drive is unmounted after every reboot: `udisksctl mount -b /dev/nvme0n1p2` before
+  touching results/. A new out_dir needs `mkdir /media/boz/Data/blammoe/results/<name>` + `ln -s`.
+  /tmp (and the session scratchpad) is wiped on reboot too.
+- Every trained checkpoint must pass the float64 audit gate (the sweep runs it): 90/90 PASS across
+  the complement and both dials.
+- Write-ups: owner's voice (first person, plain, Australian spelling, "Term - definition" lines,
+  tables, show the process including dead ends), committed straight away, linked from README and
+  the Results docs table below.
 
 **Dials (built 2026-10-28), both on the toy_complement models (`models_from`, copied, not retrained),
 expert bus, same s/c/d units:**
@@ -102,15 +159,16 @@ later). 103 tests pass. Everything lives in **`configs/toy_complement.yaml`** (s
    - a JEPA-style extra loss where the links predict the partner's expert outputs from their
      own (Claude's suggestion, not yet agreed with the owner).
 
-**Practicalities.** GPU = CMP `43:00` (`CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2`),
-one card, and tell the owner before each job (they may call stop). Run long jobs in tmux with
-a Haiku subagent watching the log. The `results/` symlinks point at `/media/boz/Data`: mount
+**Practicalities (10-22; superseded by "How runs work now" in START HERE).** GPU = CMP `43:00`
+(`CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2`), tell the owner before each job (they may
+call stop). Run long jobs in tmux. The `results/` symlinks point at `/media/boz/Data`: mount
 it first (`udisksctl mount -b /dev/nvme0n1p2`). The root disk has ~4.7 GB free. Timings on
 43:00: one pretrain 4-6 min, one fusion ~8 min, an audit of 2 variants ~7 min, hide ~8 min.
 
-**Prompt for the next session:**
-> Resume BLaMMoE: read docs/HANDOFF.md "START HERE". The complementary-models experiment is
-> built (configs/toy_complement.yaml); tell me before running s0 c0 d0 on the CMP at 43:00.
+**Prompt for the next session (same as the one at the top of START HERE):**
+> Resume BLaMMoE: read docs/HANDOFF.md "START HERE" and docs/toy-dial2-results.md. Both dials are
+> done. Help me pick between (a) fair forcing at 0.01-0.02, (b) a smooth reward, (c) the A-side
+> prose gap. Ask before any GPU job; mount the Data drive first.
 
 ## Audit fixes (background)
 
@@ -147,7 +205,7 @@ in `docs/audit-2026-10-19/`.
 
 - **Repo and environment:** `~/BLaMMoE`. The `.venv` was built with pip (torch 2.14.1+cu130).
 - **Disk:** the root disk is ~95% full. `results/toy_poc` is a symlink to `/media/boz/Data/blammoe/results/toy_poc` on the NTFS drive. If that drive is unmounted, run `udisksctl mount -b /dev/nvme0n1p2`. Set `HF_HOME=/media/boz/Data/blammoe/hf_cache` before downloading models.
-- **GPUs:** 2× CMP 170HX, both healthy: ~195 TFLOPS bf16, ~11 fp32, 64 GB each, passed a 60 GB read-back. `42:00` runs at Gen2 ×4 (slow host transfers) and `43:00` at Gen2 ×16. Always set `CUDA_DEVICE_ORDER=PCI_BUS_ID`; then CUDA 1 = `42:00`, 2 = `43:00`, 0 = the 3060 Ti (don't use it). Run one card at a time and tell the owner before each GPU job. There is no P2P, and none is needed: run one job per card.
+- **GPUs:** 2× CMP 170HX, both healthy: ~195 TFLOPS bf16, ~11 fp32, 64 GB each, passed a 60 GB read-back. `42:00` runs at Gen2 ×4 (slow host transfers) and `43:00` at Gen2 ×16. Always set `CUDA_DEVICE_ORDER=PCI_BUS_ID`; then CUDA 1 = `42:00`, 2 = `43:00`, 0 = the 3060 Ti (don't use it). Tell the owner before each GPU job; one card at a time unless they OK both (they did for the 10-28..10-30 sweeps). There is no P2P, and none is needed: run one job per card.
 - **Test fixture:** for CLI wiring checks without trained checkpoints, copy `configs/toy_poc.yaml` with `out_dir` pointed elsewhere, then run `PYTHONPATH=. python docs/audit-2026-10-19/gate_fixture_build.py <that.yaml>`. It builds untrained models plus live links with gates = 1. To shorten training scripts, also set the per-variant `steps:` under `fused.variants`: it overrides `fused.steps`.
 
 ## Where things stood after PR #1 (one paragraph; see the audit for caveats)
@@ -248,6 +306,14 @@ the write-ups.
    averaged over the ~2% win tokens weighted each ~100× and wrecked accuracy.
 4. A fresh Adam on already-trained links needs warmup: 3 steps took bits/char from
    1.651 to 1.683.
+5. **Never average an extra loss term over a sparse subset.** `pair_loss`'s answer term (a mean
+   over the batch's answer tokens) gave each answer 146x / 78x / 21x an ordinary token at p_split
+   0.05 / 0.15 / 0.5, and turned "a little forcing" into "kill the free transfer"
+   (docs/toy-dial-results.md). Weight per token inside the one mean (`answer_in_mean`). Same
+   lesson as rule 3; check this for any new loss term.
+6. **A partner-win reward that is fair per token can still be harmful.** `reward_lam` 5-50 from
+   scratch made pairing worse everywhere, controls included (docs/toy-dial2-results.md).
+   "Depends on the partner" (argmax flips vs one wrong document) isn't "uses what it knows".
 
 ## Next steps, in priority order
 
@@ -277,14 +343,16 @@ the write-ups.
      (with no unit jobs left) collects everything.
    - `toy_fused.py` now saves per-document rows (`per_doc`) for fused, shuffled-partner and
      solo, which the CIs need.
-3. **Complementary models / data-difference dose-response (next).** Pretrain A mostly on
+3. **DONE 2026-10-28: complementary models** (`docs/toy-complement-results.md`); the
+   dose-response (shifted mix, disjoint files, no code) is still open. Original plan: Pretrain A mostly on
    code and B mostly on prose, then train the links on ordinary mixed text only, with no
    recall task. Success = each model improves on its weak domain while staying fine alone:
    the first test of "encourages free transfer". A plain output average already beats both
    solos on ordinary text (0.07-0.11 bits at shared positions), so the models do make
    different errors, but today's links don't use them. Then the dose-response: shifted mix
    → disjoint files → no code. Needs a file-subset option in `blammoe/toy/corpus.py`.
-4. **Stage-2 reward-weight sweep** (λ ≈ 10-30) under `safe_mask`. λ=2 did nothing and
+4. **DONE 2026-10-30 as a from-scratch dial, harmful at λ 5/15/50** (`docs/toy-dial2-results.md`);
+   the allow/force dials and their next options are in START HERE. Original plan: stage-2 reward-weight sweep (λ ≈ 10-30) under `safe_mask`. λ=2 did nothing and
    ~100× wrecked accuracy; the interesting range is between. Then reward on generated
    text, which needs lockstep generation across two tokenizers (not built).
 5. **Real models (the actual goal):** WP1 `blammoe/models/loader.py` + verify the
