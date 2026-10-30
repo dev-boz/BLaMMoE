@@ -202,3 +202,24 @@ def test_models_from_copies_every_units_models_and_bpe_from_another_sweep(tmp_pa
                                        "rung2": False, "models_from": str(old), "overrides": sc.overrides}))
     toy_sweep.main(str(sc_path), 1, "none")
     assert (Path(sc.out_dir) / "bpe1024_train_v0.1_t0.1_p0.9.json").read_text() == "{}"
+
+
+def test_pair_units_join_two_trained_models_from_another_sweep_with_their_own_specs(tmp_path):
+    old = tmp_path / "old"
+    pairs = [{"name": "e", "model_a": ["s", "model_a"], "model_b": ["d", "model_a"]},       # A_i + prose-heavy A_i
+             {"name": "f", "model_a": ["s", "model_a"], "model_b": ["s", "model_a", 1]}]   # A_i + A_{i+1}
+    sc = SweepConfig(out_dir=str(tmp_path / "new"), seeds=[[0, 1], [2, 3]], variants=["e"], rung2=False,
+                     controls=CONTROLS, models_from=str(old), pairs=pairs,
+                     overrides={"model_a": {"p_prose": 0.1}, "model_b": {"p_prose": 0.9}})
+    us = {u.name: u for u in units(sc, BASE)}
+    assert [n for n in us if n[0] in "ef"] == ["e0", "e1", "f0", "f1"]
+    e1, f1 = us["e1"], us["f1"]
+    assert e1.kind == "pair:e" and e1.variants == ["e"] and e1.out == tmp_path / "new" / "e1"
+    assert e1.copy_models == {"model_a.pt": old / "s1" / "model_a.pt", "model_b.pt": old / "d1" / "model_a.pt"}
+    assert e1.cfg["model_a"] == {**BASE["model_a"], "seed": 2, "p_prose": 0.1}
+    assert e1.cfg["model_b"] == {**BASE["model_a"], "seed": 2, "p_prose": 0.9}  # a char model in the B slot
+    assert f1.copy_models == {"model_a.pt": old / "s1" / "model_a.pt", "model_b.pt": old / "s0" / "model_a.pt"}
+    assert (f1.cfg["model_a"]["seed"], f1.cfg["model_b"]["seed"]) == (2, 0)  # the offset wraps
+    assert us["s0"].copy_models["model_a.pt"] == old / "s0" / "model_a.pt"  # other units untouched
+    with pytest.raises(ValueError, match="models_from"):
+        units(SweepConfig(out_dir=str(tmp_path), seeds=[[0, 1]], pairs=pairs[1:]), BASE)

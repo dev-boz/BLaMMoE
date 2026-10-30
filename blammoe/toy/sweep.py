@@ -9,6 +9,9 @@ results/toy_poc, so every single-run script works on it unchanged:
 * control unit ``<name><i>`` (``controls``): one of s_i's models kept (copied), the other pretrained
   again with ``override`` on top, e.g. B trained on A's data mix: a partner of the same size and
   architecture that knows the same domain, so a gain over it is not just extra capacity.
+* pair unit ``<name><i>`` (``pairs``, needs ``models_from``): two models another sweep trained,
+  named by (unit prefix, model[, seed-set offset]), e.g. s_i's A with d_i's prose-heavy A. Nothing
+  is pretrained; each slot takes the source unit's model spec, so tokenizers and eval follow it.
 
 scripts/toy_sweep.py runs the units; this module builds their configs and reads their results
 back. Every split-recall number is on the seed-2025 eval set, so per-document rows from different
@@ -40,6 +43,7 @@ class SweepConfig:
     hide: bool = True  # attribution controls (scripts/toy_fused_hide.py) on every experts variant
     controls: list = field(default_factory=list)  # [{name, keep: model_a|model_b, override: {...}}], see units()
     models_from: str = ""  # another sweep's out_dir: copy every unit's models (and the BPE files) from there
+    pairs: list = field(default_factory=list)  # [{name, model_a: [prefix, model(, offset)], model_b: ...}], see units()
     overrides: dict = field(default_factory=dict)  # deep-merged into the base YAML (e.g. short smoke runs)
 
     @classmethod
@@ -57,7 +61,7 @@ def deep_merge(base: dict, over: dict) -> dict:
 @dataclass
 class Unit:
     name: str
-    kind: str  # "main" | "rung2" | "control:<name>" (across_seeds groups units by kind)
+    kind: str  # "main" | "rung2" | "control:<name>" | "pair:<name>" (across_seeds groups units by kind)
     cfg: dict  # a full toy_poc-style config with this unit's out_dir and seeds
     variants: list
     copy_models: dict = field(default_factory=dict)  # copied, not pretrained: {"model_a.pt": source path, ...}
@@ -95,6 +99,19 @@ def units(sc: SweepConfig, base: dict) -> list[Unit]:
     if sc.models_from:
         for u in out:
             u.copy_models = {f"{m}.pt": Path(sc.models_from) / u.name / f"{m}.pt" for m in ("model_a", "model_b")}
+    elif sc.pairs:
+        raise ValueError("pairs need models_from: they pair models another sweep trained")
+    by_name = {u.name: u for u in out}
+    for p in sc.pairs:
+        for i, main in enumerate(out[: len(sc.seeds)]):
+            cfg = deep_merge(main.cfg, {"out_dir": str(root / f"{p['name']}{i}")})
+            copy_models = {}
+            for slot in ("model_a", "model_b"):
+                prefix, model, *offset = p[slot]
+                src = by_name[f"{prefix}{(i + (offset[0] if offset else 0)) % len(sc.seeds)}"]
+                cfg[slot] = copy.deepcopy(src.cfg[model])
+                copy_models[f"{slot}.pt"] = Path(sc.models_from) / src.name / f"{model}.pt"
+            out.append(Unit(f"{p['name']}{i}", f"pair:{p['name']}", cfg, list(sc.variants), copy_models))
     return out
 
 
