@@ -42,6 +42,12 @@ airtight over ordinary-text quality.
    every weight tried (5/15/50). Best guess: its argmax win mask with one wrong partner rewards
    noise that depends on the partner, not knowledge.
 
+**2026-10-30 CPU diagnostics (`docs/toy-different-results.md`, scripts `toy_partner_shift.py` /
+`toy_where_knowledge.py`):** A's expert links into A never open (B's prose knowledge is there, in its
+experts, spread thin). The owner's new framing: the aim is a *different* model, not necessarily a
+better one; `toward` in `partner_shift.json` is the measure. Proposed next (not agreed): pair A with
+A' (d units' prose-heavy char model) to rule the tokenizer / expert spread in or out (new unit kind).
+
 **Open problem for the end goal:** A never gets prose from B through the expert bus, at any
 setting. "Free transfer between experts" so far works one way only.
 
@@ -281,7 +287,8 @@ the write-ups.
 
 | doc | what |
 |---|---|
-| **`docs/toy-dial2-results.md`** | **Newest.** 2026-10-30 dial part 2 (45/45 gates PASS): fair force weighting (answer_in_mean, w 20) at p_split 0.05 keeps ~half of B's free code transfer (-0.050 vs control, 3/3 seeds) AND B<-A recall 90-91%, no extra cost; the partner-win reward hurts at every lam (5/15/50). |
+| **`docs/toy-different-results.md`** | **Newest.** 2026-10-30 CPU diagnostics, no training: a "different because of the partner" measure (toward = real partner pulls predictions to the partner's own view more than a wrong partner; separates real transfer from the lam-50 reward's damage); B on prose is different-not-better (3/3); A-side gap = A's expert-bus reader stays shut (gates ~0.02 vs B's 0.09-0.21); B's prose IS in its experts (layer-0 MoE carries half its advantage) but spread thin over 64 small experts. Next: A + A' (char, prose-heavy) pair. |
+| **`docs/toy-dial2-results.md`** | 2026-10-30 dial part 2 (45/45 gates PASS): fair force weighting (answer_in_mean, w 20) at p_split 0.05 keeps ~half of B's free code transfer (-0.050 vs control, 3/3 seeds) AND B<-A recall 90-91%, no extra cost; the partner-win reward hurts at every lam (5/15/50). |
 | **`docs/toy-dial-results.md`** | 2026-10-29 force dial (p_split 0.05/0.15/0.5 on the complementary models, 27/27 gates PASS): any forcing switches B's free code transfer off (2 of 3 seeds fully); forced recall is on/off, not graded; cause = the answer term weighs each answer token 21-146x. |
 | **`docs/toy-complement-results.md`** | 2026-10-28 complementary models, 3 seeds + same-domain controls: B learns code from A unforced (6/6, 4-7x control); A gets no prose via the expert bus, some via the residual stream (2/3). |
 | **`docs/toy-sweep-results.md`** | **Current numbers.** The 2026-10-21 seed sweep: 3 cross-family + 3 same-design pairs, CIs, causal attribution, residual baseline, ensemble. Where older docs disagree, this wins. |

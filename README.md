@@ -78,6 +78,8 @@ bootstrap statistics, a hardware probe, and a toy end-to-end programme:
   [`docs/toy-dial-results.md`](docs/toy-dial-results.md).
 - The dial, part 2 (the partner-win reward, and the force dial with fair answer weighting):
   [`docs/toy-dial2-results.md`](docs/toy-dial2-results.md).
+- "Different, not better" and why A never gets prose (CPU diagnostics on the trained translators):
+  [`docs/toy-different-results.md`](docs/toy-different-results.md).
 
 The real-model work packages (WP1 loader, WP2 collection, WP3, WP7-WP11) are specified
 in the work plan and intentionally **not** stubbed.
