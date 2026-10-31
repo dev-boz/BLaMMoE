@@ -1,9 +1,9 @@
-# Handoff — BLaMMoE, state as of 2026-10-30
+# Handoff — BLaMMoE, state as of 2026-10-31
 
 For whoever picks this up next, human or agent. Read `CLAUDE.md` first (working agreement).
 `main` has the toy programme (PR #1 merged). The audit fixes, the seed sweep and its write-up
-and everything since (complementary models, the allow/force dials) are on local branch
-**`audit-fixes`** (committed, NEVER pushed; don't push unless the owner asks). 106 tests pass:
+and everything since (complementary models, the allow/force dials, the char pair, the outside review) are on local branch
+**`audit-fixes`** (committed, NEVER pushed; don't push unless the owner asks). 114 tests pass:
 `CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python -m pytest -q` (the venv is `.venv`).
 
 ## Project goal (from the owner)
@@ -18,6 +18,43 @@ Step one is proving that experts can be translated between models **at all**. Im
 are a bonus. Mixing e.g. a Qwen with a Mistral and getting a *worse* result still counts as
 success. So prioritise work that makes "information transfers, and it travels via experts"
 airtight over ordinary-text quality.
+
+## Working method: the size ladder (owner, 2026-10-31)
+
+Bounce between three sizes instead of climbing once. Test what's quick and easy on the toys, move
+up a level when a question needs more data or more capacity, come back down to test a theory, and
+go to medium only when really sure.
+
+| level | what | use it for |
+|---|---|---|
+| toy | our 2-3.5M toy MoEs (minutes per translator) | mechanisms, controls, bug hunts, anything needing many seeds |
+| small | a real off-the-shelf small MoE pair (to pick; must fit the CMPs) | does a toy result survive real models and real text |
+| medium | the registry's OLMoE-1B-7B / Qwen1.5-MoE pair or similar | the claim itself, once it holds at small |
+
+- Up a level only when the result holds under independent translator seeds, swapped slots and
+  matched controls, and the question really can't be answered lower down.
+- Down a level whenever something higher up surprises us: build the cheapest toy version first.
+- Same measures and leak audit at every level, so numbers compare, and a held-out eval set per
+  level that isn't used for choosing experiments.
+
+## Working method: the AI gauntlet (owner)
+
+Whenever we get stuck, or a result needs a thorough review before it gets built on, I write one
+prompt and feed it to at least 5 and up to 15 different agents across models and harnesses
+(Claude Code, Codex CLI, Gemini via agy, opencode, ...). Different models catch different things,
+and several agreeing counts for more than one strong reviewer.
+
+- One self-contained brief: the goal, what to read, the claims under test, and hard rules (CPU
+  only with `CUDA_VISIBLE_DEVICES=""`, no edits to the repo and no git, a scratch dir, time caps).
+  Ask for findings with file:line, marked as run-and-checked or opinion.
+- Each agent gets a private copy of the repo or read-only rules. No agent runs GPU jobs.
+- Check every finding against the code before acting on it, then merge into one doc with who found
+  what and how many agreed.
+- Past runs: `docs/audit-2026-10-19/` (brief `AUDIT-BRIEF.md`, merged in `docs/audit-2026-10-19.md`)
+  and `docs/review-2026-10-31/` (Codex gpt-6-astra xhigh only, a one-agent start).
+- Codex: `codex exec -m gpt-6-astra -c model_reasoning_effort='"xhigh"'
+  --dangerously-bypass-approvals-and-sandbox -C <dir> -o <report> - < prompt.md`. agy can't take
+  prompts headless, so run it in tmux.
 
 ## START HERE: after the dials (next session)
 
@@ -52,6 +89,12 @@ A' (d units' prose-heavy char model) to rule the tokenizer / expert spread in or
 the expert-bus gap is a DIRECTION effect (code flows into a prose model, prose never into a code model),
 not B's tokenizer, B's thin expert spread or A's architecture. Residual stream between same-tokenizer
 models hands each over to the other on its weak domain. Next not agreed.
+
+**2026-10-31 outside review (`docs/review-2026-10-31.md`):** the direction effect isn't established
+(shared translator init, fixed slots); `toward` is now split into attraction and wrong-partner pull;
+audit gate now fails NaN. Its ranked next: (1) controls (translator seed, slot swap, A_i+A'_(i+1),
+A'+A'), (2) what blocks prose (MoE-sum signal, resid without final link, non-zero gate start), (3) the
+50/50 char reader (models exist in results/toy_sweep), (4) a small-level real-MoE pilot. Owner to pick.
 
 **Open problem for the end goal:** A never gets prose from B through the expert bus, at any
 setting. "Free transfer between experts" so far works one way only.
@@ -292,7 +335,8 @@ the write-ups.
 
 | doc | what |
 |---|---|
-| **`docs/toy-char-pair-results.md`** | **Newest.** 2026-10-31 A + A' (prose-heavy char, same arch and init as A), 12/12 gates PASS: expert bus still gives A NO prose (= control partner, gates ~0.02), while A' gets code from A (-0.08..-0.20, like B) = a direction effect, not tokenizer/spread/reader arch. Residual stream char-char: near-total hand-over both ways (A prose 2.21 -> 1.92, last-link gates ~0.55, wrong partner 7.7 bits). |
+| **`docs/review-2026-10-31.md`** | **Newest.** 2026-10-31 outside review (Codex gpt-6-astra xhigh; raw report + scripts in `docs/review-2026-10-31/`): every translator shares one init + draw order (`fused.seed` 0) and the code model is always slot 1, so "direction effect" is unproven; `toward` = attraction minus wrong-partner pull (now split in partner_shift.json; B code attraction +0.039 vs toward +0.089; resid hand-over 84% wrong-partner damage); audit NaN pass fixed. Ranked next steps by size. |
+| **`docs/toy-char-pair-results.md`** | 2026-10-31 A + A' (prose-heavy char, same arch and init as A), 12/12 gates PASS: expert bus still gives A NO prose (= control partner, gates ~0.02), while A' gets code from A (-0.08..-0.20, like B) = a direction effect, not tokenizer/spread/reader arch. Residual stream char-char: near-total hand-over both ways (A prose 2.21 -> 1.92, last-link gates ~0.55, wrong partner 7.7 bits). |
 | **`docs/toy-different-results.md`** | 2026-10-30 CPU diagnostics, no training: a "different because of the partner" measure (toward = real partner pulls predictions to the partner's own view more than a wrong partner; separates real transfer from the lam-50 reward's damage); B on prose is different-not-better (3/3); A-side gap = A's expert-bus reader stays shut (gates ~0.02 vs B's 0.09-0.21); B's prose IS in its experts (layer-0 MoE carries half its advantage) but spread thin over 64 small experts. Next: A + A' (char, prose-heavy) pair. |
 | **`docs/toy-dial2-results.md`** | 2026-10-30 dial part 2 (45/45 gates PASS): fair force weighting (answer_in_mean, w 20) at p_split 0.05 keeps ~half of B's free code transfer (-0.050 vs control, 3/3 seeds) AND B<-A recall 90-91%, no extra cost; the partner-win reward hurts at every lam (5/15/50). |
 | **`docs/toy-dial-results.md`** | 2026-10-29 force dial (p_split 0.05/0.15/0.5 on the complementary models, 27/27 gates PASS): any forcing switches B's free code transfer off (2 of 3 seeds fully); forced recall is on/off, not graded; cause = the answer term weighs each answer token 21-146x. |

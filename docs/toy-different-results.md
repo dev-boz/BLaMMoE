@@ -1,5 +1,7 @@
 # "Different, not better", and why A never gets prose (CPU diagnostics, no training)
 
+> **Correction, 2026-10-31 ([outside review](review-2026-10-31.md)).** "Toward" mixes two things: how far the real partner pulls the model towards the partner's view (attraction) and how far a wrong partner pushes it away. It's now split in `partner_shift.json`. B's code transfer holds but is about half the size (attraction +0.039 vs toward +0.089, control zero). λ 50 doesn't just fail to lean: the real partner pushes B away from A's view (attraction -0.030). B on prose still holds (attraction +0.003, 3/3). All translators here also share one initialisation (`fused.seed` 0), so the 3 seeds are 3 model sets, not 3 training runs.
+
 ## Why this
 
 Two things came out of the dials.

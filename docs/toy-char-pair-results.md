@@ -1,5 +1,7 @@
 # A with a prose-heavy char partner: it's not the tokenizer
 
+> **Correction, 2026-10-31 ([outside review](review-2026-10-31.md)).** All translators share one initialisation and training order (`fused.seed` 0), and the code-heavy model is always in the first slot, so "direction effect" is a pattern in these runs, not yet a finding: it needs independent translator seeds and swapped slots. The residual "toward" of +0.46 to +0.48 is mostly a wrong partner wrecking the model. The real partner's attraction is +0.072 to +0.077 (still large, closing about three-quarters of the gap to the partner's view). Removing the final link removes most of the hand-over, so it's the partner's last-layer prediction coming through, not experts cooperating.
+
 ## Why this
 
 In every run so far, A (code-heavy, char-level) never got prose from B (prose-heavy, BPE) through the expert bus. The [CPU diagnostics](toy-different-results.md) narrowed it down. A's reader on the expert bus never opens, and B's prose knowledge *is* in its experts, just spread thinly over 64 small ones. That left three guesses:
