@@ -14,6 +14,11 @@ next-character ones (``fused.diversity``'s view):
   toward       JS(paired with a wrong partner, partner alone) - JS(paired, partner alone): how much
                closer the real partner pulls the model to what the partner itself predicts at that
                spot than a wrong partner does (positive = towards the partner's own view)
+               = attraction + repulsion, split exactly (the Codex review, 2026-10-31):
+  attraction   JS(alone, partner alone) - JS(paired, partner alone): how far the real partner
+               actually moves the model towards the partner's view (the transfer part)
+  repulsion    JS(paired with a wrong partner, partner alone) - JS(alone, partner alone): how far a
+               wrong partner pushes it away (damage; it inflates toward when the links lean hard)
   bits         bits/char paired minus alone, and paired minus wrong partner (the "better" view)
 
 JS in nats, means per position. Each has per-document rows so differences get paired bootstrap CIs.
@@ -57,7 +62,7 @@ def shift_rows(p: dict, partner_solo: dict, texts: list[str], chars: list[str]) 
     S, Fu, W, P = (torch.stack([d[k] for k in keys]) for d in (p["solo"], p["fused"], p["wrong"], partner_solo))
     docs = [k[0] for k in keys]
     js = {"shift": _js(Fu, S), "shift_wrong": _js(W, S), "dependence": _js(Fu, W),
-          "fused_to_partner": _js(Fu, P), "wrong_to_partner": _js(W, P)}
+          "fused_to_partner": _js(Fu, P), "wrong_to_partner": _js(W, P), "solo_to_partner": _js(S, P)}
     return {k: doc_rows(v, docs, len(texts)) for k, v in js.items()}
 
 
@@ -98,6 +103,8 @@ def analyse(unit: Path, variant: str) -> dict:
             rows = shift_rows(p[m], p[1 - m]["solo"], texts, chars)
             r = {k: pooled(x) for k, x in rows.items()}
             r["toward"] = paired_bootstrap_diff(rows["wrong_to_partner"], rows["fused_to_partner"])
+            r["attraction"] = paired_bootstrap_diff(rows["solo_to_partner"], rows["fused_to_partner"])
+            r["repulsion"] = paired_bootstrap_diff(rows["wrong_to_partner"], rows["solo_to_partner"])
             r["dependence_minus_shift_wrong"] = paired_bootstrap_diff(rows["dependence"], rows["shift_wrong"])
             r["bits"] = {c: pooled(bits[m][c]) for c in CONDS}
             r["bits_fused_minus_solo"] = paired_bootstrap_diff(bits[m]["fused"], bits[m]["solo"])
@@ -119,6 +126,8 @@ def main(root: str, threads: int = 8) -> None:
                 print(f"{variant} {unit.name} {k}: shift {x['shift']:.4f} wrong {x['shift_wrong']:.4f} "
                       f"dep {x['dependence']:.4f} toward {x['toward']['diff']:+.4f} "
                       f"[{x['toward']['lo']:+.4f}, {x['toward']['hi']:+.4f}] "
+                      f"attr {x['attraction']['diff']:+.4f} [{x['attraction']['lo']:+.4f}, "
+                      f"{x['attraction']['hi']:+.4f}] rep {x['repulsion']['diff']:+.4f} "
                       f"bits {x['bits_fused_minus_solo']['diff']:+.3f}", flush=True)
     (root / "partner_shift.json").write_text(json.dumps(res, indent=1))
 

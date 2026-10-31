@@ -84,5 +84,19 @@ def test_shift_rows_are_zero_when_the_partner_changes_nothing():
     rows = ps.shift_rows({"solo": solo, "fused": solo, "wrong": solo}, partner, texts, chars)
     for k in ("shift", "shift_wrong", "dependence"):
         assert abs(ps.pooled(rows[k])) < 1e-9
-    assert ps.pooled(rows["fused_to_partner"]) == ps.pooled(rows["wrong_to_partner"]) > 0
+    assert ps.pooled(rows["fused_to_partner"]) == ps.pooled(rows["wrong_to_partner"]) == ps.pooled(rows["solo_to_partner"]) > 0
     assert [r[1] for r in rows["shift"]] == [3.0, 3.0]
+
+
+def test_toward_splits_exactly_into_attraction_and_repulsion():
+    """The review's counterexample: partner = alone = [0.9, 0.1], paired [0.8, 0.2], wrong [0.1, 0.9].
+    The real partner moves the model AWAY from the partner, yet toward is large and positive; the
+    split puts all of it in repulsion and makes attraction negative."""
+    texts, chars = ["ab"], ["a", "b"]
+    solo = {(0, 0): torch.tensor([0.9, 0.1])}
+    p = {"solo": solo, "fused": {(0, 0): torch.tensor([0.8, 0.2])}, "wrong": {(0, 0): torch.tensor([0.1, 0.9])}}
+    rows = ps.shift_rows(p, solo, texts, chars)
+    to, fu, wr = (ps.pooled(rows[k]) for k in ("solo_to_partner", "fused_to_partner", "wrong_to_partner"))
+    toward, attraction, repulsion = wr - fu, to - fu, wr - to
+    assert toward > 0.3 and attraction < 0 and repulsion > toward
+    assert abs(toward - (attraction + repulsion)) < 1e-12

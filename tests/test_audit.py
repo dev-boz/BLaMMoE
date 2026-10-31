@@ -149,6 +149,18 @@ def test_causality_gate_catches_the_old_mask_leak_in_a_only():
     assert r["a"]["n_bad"] > 0 and r["b"]["n_bad"] == 0
 
 
+def test_causality_gate_fails_non_finite_outputs():
+    """NaN never compares greater than tol, so NaN outputs used to pass the gate with max_diff 0."""
+    ta, tb = CharTokenizer(), bpe()
+    pair = live_pair(ta, tb, "resid", safe_mask=True)
+    hook = pair.A.head.register_forward_hook(lambda m, i, o: torch.full_like(o, float("nan")))
+    try:
+        r = causality_gate(pair, gate_docs(), ta, tb, 128)
+    finally:
+        hook.remove()
+    assert not r["ok"] and r["a"]["n_bad"] == r["a"]["n_positions"] > 0 and r["a"]["max_diff"] == float("inf")
+
+
 def test_changing_unread_text_never_changes_safe_predictions():
     """Independent of the prefix machinery: two texts that agree up to char c must give identical
     predictions at every position (either model) that has read only text[:c]."""

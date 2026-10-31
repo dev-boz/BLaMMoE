@@ -153,8 +153,8 @@ def causality_gate(
     batch: int = 32, **fwd_kw,
 ) -> dict:
     """Full-text vs prefix-honest log-probs at EVERY scored position of every (text_a, text_b)
-    doc, both models. ``ok`` is False if any position differs by more than ``tol``: then some
-    model's prediction depended on chars it had not read."""
+    doc, both models. ``ok`` is False if any position differs by more than ``tol`` (or is not
+    finite): then some model's prediction depended on chars it had not read."""
     dev = next(pair.parameters()).device
     res = {s: {"max_diff": 0.0, "n_positions": 0, "n_bad": 0, "worst": None} for s in ("a", "b")}
     for d, (text_a, text_b) in enumerate(docs):
@@ -166,6 +166,7 @@ def causality_gate(
             full = logits[0, pos].log_softmax(-1).cpu()
             honest = honest_logprobs(pair, side, text_a, text_b, pos, tok_a, tok_b, L, batch, **fwd_kw)
             diff = (full - honest).abs().amax(-1)
+            diff = torch.where(diff.isfinite(), diff, torch.full_like(diff, float("inf")))  # NaN fails, not passes
             r = res[side]
             r["n_positions"] += len(pos)
             r["n_bad"] += int((diff > tol).sum())
