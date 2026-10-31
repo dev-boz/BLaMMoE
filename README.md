@@ -84,6 +84,8 @@ bootstrap statistics, a hardware probe, and a toy end-to-end programme:
   [`docs/toy-char-pair-results.md`](docs/toy-char-pair-results.md).
 - Outside review (Codex gpt-6-astra) of the char-pair result, and the attraction / wrong-partner split of "toward":
   [`docs/review-2026-10-31.md`](docs/review-2026-10-31.md).
+- Controls for the char pair (new translator seed, swapped slots, a partner from another init): the one-way pattern holds:
+  [`docs/toy-char-ctrl-results.md`](docs/toy-char-ctrl-results.md).
 
 The real-model work packages (WP1 loader, WP2 collection, WP3, WP7-WP11) are specified
 in the work plan and intentionally **not** stubbed.

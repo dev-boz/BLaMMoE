@@ -1,9 +1,9 @@
-# Handoff — BLaMMoE, state as of 2026-10-31
+# Handoff — BLaMMoE, state as of 2026-11-01
 
 For whoever picks this up next, human or agent. Read `CLAUDE.md` first (working agreement).
 `main` has the toy programme (PR #1 merged). The audit fixes, the seed sweep and its write-up
 and everything since (complementary models, the allow/force dials, the char pair, the outside review) are on local branch
-**`audit-fixes`** (committed, NEVER pushed; don't push unless the owner asks). 114 tests pass:
+**`audit-fixes`** (committed, NEVER pushed; don't push unless the owner asks). 117 tests pass:
 `CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python -m pytest -q` (the venv is `.venv`).
 
 ## Project goal (from the owner)
@@ -95,6 +95,14 @@ models hands each over to the other on its weak domain. Next not agreed.
 audit gate now fails NaN. Its ranked next: (1) controls (translator seed, slot swap, A_i+A'_(i+1),
 A'+A'), (2) what blocks prose (MoE-sum signal, resid without final link, non-zero gate start), (3) the
 50/50 char reader (models exist in results/toy_sweep), (4) a small-level real-MoE pilot. Owner to pick.
+
+**2026-11-01 controls (`docs/toy-char-ctrl-results.md`, `configs/toy_char_ctrl.yaml`, translator
+seed 1):** the one-way pattern holds with a new translator seed, swapped slots (x units) and an A'
+from another init (g units). A prose = control partner (-0.018 bits/char, attraction +0.002 but wrong
+pull +0.002); A' code -0.10..-0.14 vs A'+A' control -0.024, attraction +0.014..+0.024 (9/9) vs 0.
+Gain size per unit moves ~2x with translator seed: read means. Audit gate also fixed for unequal-
+length docs (reader past a shorter partner's end; audit artefact, not a leak; 2148ce3). Channel run
+(`configs/toy_char_channel.yaml`: MoE-sum signal, resid without the final link) queued after it.
 
 **Open problem for the end goal:** A never gets prose from B through the expert bus, at any
 setting. "Free transfer between experts" so far works one way only.
@@ -335,7 +343,8 @@ the write-ups.
 
 | doc | what |
 |---|---|
-| **`docs/review-2026-10-31.md`** | **Newest.** 2026-10-31 outside review (Codex gpt-6-astra xhigh; raw report + scripts in `docs/review-2026-10-31/`): every translator shares one init + draw order (`fused.seed` 0) and the code model is always slot 1, so "direction effect" is unproven; `toward` = attraction minus wrong-partner pull (now split in partner_shift.json; B code attraction +0.039 vs toward +0.089; resid hand-over 84% wrong-partner damage); audit NaN pass fixed. Ranked next steps by size. |
+| **`docs/toy-char-ctrl-results.md`** | **Newest.** 2026-11-01 controls for the char pair, translator seed 1, 15/15 gates PASS: the one-way pattern survives a new translator seed, swapped slots and an A' from another init. A on prose = control (-0.018), attraction +0.002 matched by wrong-partner pull; A' on code -0.10..-0.14 vs A'+A' control -0.024, attraction 9/9 above zero vs 0. Per-unit size moves ~2x with translator seed. |
+| **`docs/review-2026-10-31.md`** | 2026-10-31 outside review (Codex gpt-6-astra xhigh; raw report + scripts in `docs/review-2026-10-31/`): every translator shares one init + draw order (`fused.seed` 0) and the code model is always slot 1, so "direction effect" is unproven; `toward` = attraction minus wrong-partner pull (now split in partner_shift.json; B code attraction +0.039 vs toward +0.089; resid hand-over 84% wrong-partner damage); audit NaN pass fixed. Ranked next steps by size. |
 | **`docs/toy-char-pair-results.md`** | 2026-10-31 A + A' (prose-heavy char, same arch and init as A), 12/12 gates PASS: expert bus still gives A NO prose (= control partner, gates ~0.02), while A' gets code from A (-0.08..-0.20, like B) = a direction effect, not tokenizer/spread/reader arch. Residual stream char-char: near-total hand-over both ways (A prose 2.21 -> 1.92, last-link gates ~0.55, wrong partner 7.7 bits). |
 | **`docs/toy-different-results.md`** | 2026-10-30 CPU diagnostics, no training: a "different because of the partner" measure (toward = real partner pulls predictions to the partner's own view more than a wrong partner; separates real transfer from the lam-50 reward's damage); B on prose is different-not-better (3/3); A-side gap = A's expert-bus reader stays shut (gates ~0.02 vs B's 0.09-0.21); B's prose IS in its experts (layer-0 MoE carries half its advantage) but spread thin over 64 small experts. Next: A + A' (char, prose-heavy) pair. |
 | **`docs/toy-dial2-results.md`** | 2026-10-30 dial part 2 (45/45 gates PASS): fair force weighting (answer_in_mean, w 20) at p_split 0.05 keeps ~half of B's free code transfer (-0.050 vs control, 3/3 seeds) AND B<-A recall 90-91%, no extra cost; the partner-win reward hurts at every lam (5/15/50). |
