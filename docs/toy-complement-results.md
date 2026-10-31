@@ -144,7 +144,7 @@ It doesn't show it working both ways through the experts. A gets almost nothing,
 ## Reproduce
 
 ```bash
-udisksctl mount -b /dev/nvme0n1p2   # results/toy_complement is a symlink to the Data drive
+udisksctl mount -b /dev/disk/by-label/Data   # results/toy_complement is a symlink to the Data drive
 CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. \
   .venv/bin/python scripts/toy_sweep.py configs/toy_complement.yaml 4 s0 c0 d0
 ```

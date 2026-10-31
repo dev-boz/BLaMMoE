@@ -121,7 +121,7 @@ Seed 1 is worth keeping an eye on. It's the only seed where recall switched on a
 ## Reproduce
 
 ```bash
-udisksctl mount -b /dev/nvme0n1p2   # results/ are symlinks to the Data drive
+udisksctl mount -b /dev/disk/by-label/Data   # results/ are symlinks to the Data drive
 # needs results/toy_complement (the models are copied from there)
 CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1 PYTHONPATH=. \
   .venv/bin/python scripts/toy_sweep.py configs/toy_dial.yaml 4 s0 c0 d0 s2

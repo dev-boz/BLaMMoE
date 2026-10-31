@@ -96,7 +96,7 @@ And the usual caveats: toy models, 3 seeds, 48 test documents per domain, one da
 ## Reproduce
 
 ```bash
-udisksctl mount -b /dev/nvme0n1p2   # results/ are symlinks to the Data drive
+udisksctl mount -b /dev/disk/by-label/Data   # results/ are symlinks to the Data drive
 for r in toy_complement toy_dial toy_dial2; do
   CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python scripts/toy_partner_shift.py results/$r 5
 done

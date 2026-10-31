@@ -27,7 +27,7 @@ plus `results/toy_sweep/summary.json` at the end.
 
 ```bash
 cd ~/BLaMMoE && git status --short && git log --oneline -1    # clean, faeaddf or later, on audit-fixes
-mountpoint /media/boz/Data || udisksctl mount -b /dev/nvme0n1p2
+mountpoint /media/boz/Data || udisksctl mount -b /dev/disk/by-label/Data
 ls -la results/toy_sweep/                                      # should be empty (smoke runs went to /tmp)
 nvidia-smi --query-gpu=index,pci.bus_id,temperature.gpu,memory.used --format=csv
 systemctl is-active cmp-thermal-watch                          # cooling watcher up

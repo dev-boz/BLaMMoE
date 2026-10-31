@@ -85,7 +85,7 @@ setting. "Free transfer between experts" so far works one way only.
   don't work here (sleep is blocked).
 - **Always pin the GPU**: `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1` (42:00) or `=2`
   (43:00), and `CUDA_VISIBLE_DEVICES=""` for CPU work. Unpinned, torch picks a CMP on its own.
-- The Data drive is unmounted after every reboot: `udisksctl mount -b /dev/nvme0n1p2` before
+- The Data drive is unmounted after every reboot: `udisksctl mount -b /dev/disk/by-label/Data` before
   touching results/. A new out_dir needs `mkdir /media/boz/Data/blammoe/results/<name>` + `ln -s`.
   /tmp (and the session scratchpad) is wiped on reboot too.
 - Every trained checkpoint must pass the float64 audit gate (the sweep runs it): 90/90 PASS across
@@ -159,7 +159,7 @@ later). 103 tests pass. Everything lives in **`configs/toy_complement.yaml`** (s
    should beat its gain in c_i (and B's code gain in s_i beat d_i).
 5. **Run order:** seed 0 first (`s0 c0 d0`, est. ~1.5 h on 43:00: 4 pretrains, 6 fusions,
    3 audits), then `s1 s2 c1 c2 d1 d2` if it looks worth it. First:
-   `udisksctl mount -b /dev/nvme0n1p2`, `mkdir -p /media/boz/Data/blammoe/results/toy_complement`,
+   `udisksctl mount -b /dev/disk/by-label/Data`, `mkdir -p /media/boz/Data/blammoe/results/toy_complement`,
    `ln -s /media/boz/Data/blammoe/results/toy_complement results/toy_complement`. Then in tmux:
    `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. .venv/bin/python
    scripts/toy_sweep.py configs/toy_complement.yaml 4 s0 c0 d0 2>&1 | tee results/toy_complement/sweep.log`.
@@ -173,7 +173,7 @@ later). 103 tests pass. Everything lives in **`configs/toy_complement.yaml`** (s
 **Practicalities (10-22; superseded by "How runs work now" in START HERE).** GPU = CMP `43:00`
 (`CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2`), tell the owner before each job (they may
 call stop). Run long jobs in tmux. The `results/` symlinks point at `/media/boz/Data`: mount
-it first (`udisksctl mount -b /dev/nvme0n1p2`). The root disk has ~4.7 GB free. Timings on
+it first (`udisksctl mount -b /dev/disk/by-label/Data`). The root disk has ~4.7 GB free. Timings on
 43:00: one pretrain 4-6 min, one fusion ~8 min, an audit of 2 variants ~7 min, hide ~8 min.
 
 **Prompt for the next session (same as the one at the top of START HERE):**
@@ -215,7 +215,7 @@ in `docs/audit-2026-10-19/`.
 ## This machine (boz-linux)
 
 - **Repo and environment:** `~/BLaMMoE`. The `.venv` was built with pip (torch 2.14.1+cu130).
-- **Disk:** the root disk is ~95% full. `results/toy_poc` is a symlink to `/media/boz/Data/blammoe/results/toy_poc` on the NTFS drive. If that drive is unmounted, run `udisksctl mount -b /dev/nvme0n1p2`. Set `HF_HOME=/media/boz/Data/blammoe/hf_cache` before downloading models.
+- **Disk:** the root disk is ~95% full. `results/toy_poc` is a symlink to `/media/boz/Data/blammoe/results/toy_poc` on the NTFS drive. If that drive is unmounted, run `udisksctl mount -b /dev/disk/by-label/Data`. Set `HF_HOME=/media/boz/Data/blammoe/hf_cache` before downloading models.
 - **GPUs:** 2× CMP 170HX, both healthy: ~195 TFLOPS bf16, ~11 fp32, 64 GB each, passed a 60 GB read-back. `42:00` runs at Gen2 ×4 (slow host transfers) and `43:00` at Gen2 ×16. Always set `CUDA_DEVICE_ORDER=PCI_BUS_ID`; then CUDA 1 = `42:00`, 2 = `43:00`, 0 = the 3060 Ti (don't use it). Tell the owner before each GPU job; one card at a time unless they OK both (they did for the 10-28..10-30 sweeps). There is no P2P, and none is needed: run one job per card.
 - **Test fixture:** for CLI wiring checks without trained checkpoints, copy `configs/toy_poc.yaml` with `out_dir` pointed elsewhere, then run `PYTHONPATH=. python docs/audit-2026-10-19/gate_fixture_build.py <that.yaml>`. It builds untrained models plus live links with gates = 1. To shorten training scripts, also set the per-variant `steps:` under `fused.variants`: it overrides `fused.steps`.
 
