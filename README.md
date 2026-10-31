@@ -80,6 +80,8 @@ bootstrap statistics, a hardware probe, and a toy end-to-end programme:
   [`docs/toy-dial2-results.md`](docs/toy-dial2-results.md).
 - "Different, not better" and why A never gets prose (CPU diagnostics on the trained translators):
   [`docs/toy-different-results.md`](docs/toy-different-results.md).
+- A with a prose-heavy char partner (same architecture as A): the expert-bus gap is not the tokenizer:
+  [`docs/toy-char-pair-results.md`](docs/toy-char-pair-results.md).
 
 The real-model work packages (WP1 loader, WP2 collection, WP3, WP7-WP11) are specified
 in the work plan and intentionally **not** stubbed.

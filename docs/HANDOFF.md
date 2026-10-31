@@ -48,6 +48,11 @@ experts, spread thin). The owner's new framing: the aim is a *different* model, 
 better one; `toward` in `partner_shift.json` is the measure. Proposed next (not agreed): pair A with
 A' (d units' prose-heavy char model) to rule the tokenizer / expert spread in or out (new unit kind).
 
+**2026-10-31 char pair (`docs/toy-char-pair-results.md`, `configs/toy_char_pair.yaml`, sweep `pairs:`):**
+the expert-bus gap is a DIRECTION effect (code flows into a prose model, prose never into a code model),
+not B's tokenizer, B's thin expert spread or A's architecture. Residual stream between same-tokenizer
+models hands each over to the other on its weak domain. Next not agreed.
+
 **Open problem for the end goal:** A never gets prose from B through the expert bus, at any
 setting. "Free transfer between experts" so far works one way only.
 
@@ -287,7 +292,8 @@ the write-ups.
 
 | doc | what |
 |---|---|
-| **`docs/toy-different-results.md`** | **Newest.** 2026-10-30 CPU diagnostics, no training: a "different because of the partner" measure (toward = real partner pulls predictions to the partner's own view more than a wrong partner; separates real transfer from the lam-50 reward's damage); B on prose is different-not-better (3/3); A-side gap = A's expert-bus reader stays shut (gates ~0.02 vs B's 0.09-0.21); B's prose IS in its experts (layer-0 MoE carries half its advantage) but spread thin over 64 small experts. Next: A + A' (char, prose-heavy) pair. |
+| **`docs/toy-char-pair-results.md`** | **Newest.** 2026-10-31 A + A' (prose-heavy char, same arch and init as A), 12/12 gates PASS: expert bus still gives A NO prose (= control partner, gates ~0.02), while A' gets code from A (-0.08..-0.20, like B) = a direction effect, not tokenizer/spread/reader arch. Residual stream char-char: near-total hand-over both ways (A prose 2.21 -> 1.92, last-link gates ~0.55, wrong partner 7.7 bits). |
+| **`docs/toy-different-results.md`** | 2026-10-30 CPU diagnostics, no training: a "different because of the partner" measure (toward = real partner pulls predictions to the partner's own view more than a wrong partner; separates real transfer from the lam-50 reward's damage); B on prose is different-not-better (3/3); A-side gap = A's expert-bus reader stays shut (gates ~0.02 vs B's 0.09-0.21); B's prose IS in its experts (layer-0 MoE carries half its advantage) but spread thin over 64 small experts. Next: A + A' (char, prose-heavy) pair. |
 | **`docs/toy-dial2-results.md`** | 2026-10-30 dial part 2 (45/45 gates PASS): fair force weighting (answer_in_mean, w 20) at p_split 0.05 keeps ~half of B's free code transfer (-0.050 vs control, 3/3 seeds) AND B<-A recall 90-91%, no extra cost; the partner-win reward hurts at every lam (5/15/50). |
 | **`docs/toy-dial-results.md`** | 2026-10-29 force dial (p_split 0.05/0.15/0.5 on the complementary models, 27/27 gates PASS): any forcing switches B's free code transfer off (2 of 3 seeds fully); forced recall is on/off, not graded; cause = the answer term weighs each answer token 21-146x. |
 | **`docs/toy-complement-results.md`** | 2026-10-28 complementary models, 3 seeds + same-domain controls: B learns code from A unforced (6/6, 4-7x control); A gets no prose via the expert bus, some via the residual stream (2/3). |
