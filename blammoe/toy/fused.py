@@ -186,6 +186,15 @@ class FusedPair(nn.Module):
     def bridge_parameters(self):
         return self.links.parameters()
 
+    def start_gates(self, a: float = 0.0, b: float = 0.0) -> None:
+        """Start every link's readers part-open: tanh(gate) = ``a`` for model A's readers
+        (rx_a), ``b`` for B's. Default 0 = shut, as built. Draws no randomness, so the rest
+        of the init is unchanged."""
+        with torch.no_grad():
+            for lk in self.links.values():
+                lk.rx_a.gate.fill_(math.atanh(a))
+                lk.rx_b.gate.fill_(math.atanh(b))
+
     def forward(
         self, ids_a: torch.Tensor, ids_b: torch.Tensor, ends_a: torch.Tensor, ends_b: torch.Tensor,
         *, disabled: frozenset[int] = frozenset(), partner_roll: int = 0, attn: dict | None = None,

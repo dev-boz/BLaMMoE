@@ -41,6 +41,7 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
         m2 = copy.deepcopy(m1)  # self-fusion control: two copies of the same model
     pair = FusedPair(m1, m2, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"), v.get("rel_pos", False),
                      v.get("safe_mask", False)).to(device)
+    pair.start_gates(v.get("gate_start_a", 0.0), v.get("gate_start_b", 0.0))
     t0 = time.time()
     logf = open(out / f"fused_{variant}.log", "w")
 

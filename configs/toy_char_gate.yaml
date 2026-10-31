@@ -1,0 +1,27 @@
+# Does A's expert-bus reader just never open? (docs/toy-char-channel-results.md, "opening vs combining")
+# Same pairs and unforced expert-bus recipe as toy_char_pair (translator seed 0, so its experts run is the
+# comparison), but A's readers start part-open: tanh(gate) = 0.3 on every link, about where A's reader
+# went on the MoE-sum channel. A''s readers start shut as before. FusedPair.start_gates draws no
+# randomness, so the rest of the init and the training draws match toy_char_pair exactly.
+#   e<i> = s_i's A + d_i's A';  f<i> = s_i's A + s_{i+1}'s A (A's control, same gate start)
+# Read: A on prose in e vs f, and whether A's gates stay open. If A gets prose through separate expert
+# entries now, the block was opening; if its gates close or it gains no more than f, it's combining.
+base: configs/toy_poc.yaml
+out_dir: results/toy_char_gate      # symlink to the Data drive
+models_from: results/toy_complement
+seeds: [[0, 1], [2, 3], [4, 5]]
+variants: [ab_experts_all_rel_safe_text_ga3]
+rung2: false
+hide: false
+controls:                           # must match toy_complement.yaml: the pairs name its d units' models
+  - {name: c, keep: model_a, override: {model_b: {p_prose: 0.1}}}
+  - {name: d, keep: model_b, override: {model_a: {p_prose: 0.9}}}
+pairs:
+  - {name: e, model_a: [s, model_a], model_b: [d, model_a]}
+  - {name: f, model_a: [s, model_a], model_b: [s, model_a, 1]}
+overrides:
+  model_a: {p_prose: 0.1}
+  model_b: {p_prose: 0.9}
+  fused:
+    variants:
+      ab_experts_all_rel_safe_text_ga3: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.0, gate_start_a: 0.3}

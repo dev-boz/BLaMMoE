@@ -251,3 +251,24 @@ def test_answer_in_mean_weighs_each_answer_token_1_plus_w():
     assert torch.isclose(pair_loss(l2, b2, 20.0, answer_in_mean=True), pair_loss(l2, b2))
     old = plain + 20 * torch.nn.functional.cross_entropy(logits[m], b.targets[m])
     assert torch.isclose(pair_loss(logits, b, 20.0), old)
+
+
+def test_start_gates_opens_one_side_and_leaves_the_init_alone():
+    """gate_start_a: A's readers start at tanh(gate) = a, B's stay shut, nothing else in the
+    translator's init moves, and no randomness is drawn (so later training draws match too)."""
+    p0, ta, tb = pair_and_toks()
+    p1, _, _ = pair_and_toks()
+    state = torch.random.get_rng_state()
+    p1.start_gates(0.3)
+    assert torch.equal(torch.random.get_rng_state(), state)
+    s0, s1 = p0.links.state_dict(), p1.links.state_dict()
+    for k in s0:
+        if k.endswith("rx_a.gate"):
+            assert torch.allclose(torch.tanh(s1[k]), torch.tensor([0.3]))
+        else:
+            assert torch.equal(s0[k], s1[k]), k
+    p1.start_gates(0.1, 0.2)
+    assert all(torch.allclose(torch.tanh(lk.rx_b.gate), torch.tensor([0.2])) for lk in p1.links.values())
+    hist = train_fused(p1, ta, tb, mixed_draw(PROSE, CODE, L, 0.5, seed=1), L, steps=2, batch_size=2,
+                       lr=1e-2, answer_weight=1.0, log=lambda m: None, log_every=1)
+    assert all(abs(g[0] - 0.1) < 0.05 and abs(g[1] - 0.2) < 0.05 for g in hist[0]["gates"].values())
