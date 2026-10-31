@@ -117,10 +117,14 @@ def honest_logprobs(
     """[P, V] log-probs of model ``side`` ("a" | "b") at its input ``positions``, each re-run on
     only what that position has read. The reader keeps its own full-text tokens 0..t (with
     their full-text closed ends); the partner is re-tokenized on ``partner_text[:e_t]``, e_t =
-    chars read by position t. Works in both directions and for any pair of tokenizers."""
+    chars read by position t. Works in both directions and for any pair of tokenizers.
+    Partner tokens ending past ``cover`` (the end of its last full-text INPUT token) are
+    dropped: in the full run its final token is only a target, so a reader that has read past
+    the end of a shorter partner text must not get it as an input here either."""
     own_tok, own_text, p_tok, p_text = (tok_a, text_a, tok_b, text_b) if side == "a" else (tok_b, text_b, tok_a, text_a)
     full = make_batch([Sample(text=own_text, blind=own_text)], own_tok, L)
     own_ends, own_closed = token_ends(full)[0].tolist(), closed_token_ends(full)[0].tolist()
+    cover = make_batch([Sample(text=p_text, blind=p_text)], p_tok, L).offsets[0][-1][1]
     dev = next(pair.parameters()).device
     out = []
     for k in range(0, len(positions), batch):
@@ -132,9 +136,11 @@ def honest_logprobs(
             o_end.append(own_ends[: t + 1])
             o_cl.append(own_closed[: t + 1])
             ids, off = p_tok.encode(p_text[:e])
-            p_ids.append(ids)
-            p_end.append([x for _, x in off])
-            p_cl.append(p_tok.closed_ends(p_text[:e], off))
+            cl = p_tok.closed_ends(p_text[:e], off)
+            n = sum(x <= cover for _, x in off)
+            p_ids.append(ids[:n])
+            p_end.append([x for _, x in off[:n]])
+            p_cl.append(cl[:n])
         own = (_fill(o_ids, own_tok.pad_id), _fill(o_end, NEVER), _fill(o_cl, NEVER))
         par = (_fill(p_ids, p_tok.pad_id), _fill(p_end, NEVER), _fill(p_cl, NEVER))
         (ia, ea, ca), (ib, eb, cb) = (own, par) if side == "a" else (par, own)

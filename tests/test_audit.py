@@ -140,6 +140,16 @@ def test_causality_gate_passes_safe_pairs_in_both_directions(signal):
     assert r["a"]["n_positions"] > 200 and r["b"]["n_positions"] > 50
 
 
+@pytest.mark.parametrize("signal", ["experts", "moe", "resid"])
+def test_causality_gate_passes_when_one_text_is_longer(signal):
+    """A reader that has read past the end of a shorter partner text: the full run never had
+    the partner's final token as an input (it's only a target), so the re-run mustn't either."""
+    ta, tb = CharTokenizer(), bpe()
+    pair = live_pair(ta, tb, signal, safe_mask=True)
+    r = causality_gate(pair, [(TEXT[:100], TEXT[:60]), (TEXT[:60], TEXT[:100])], ta, tb, 128)
+    assert r["ok"], r
+
+
 def test_causality_gate_catches_the_old_mask_leak_in_a_only():
     """Positive control: the plain mask lets A (char) read BPE boundaries that depend on unseen
     chars; B reading char-level A cannot leak. The gate must see exactly that."""
