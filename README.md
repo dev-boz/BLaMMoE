@@ -86,6 +86,8 @@ bootstrap statistics, a hardware probe, and a toy end-to-end programme:
   [`docs/review-2026-10-31.md`](docs/review-2026-10-31.md).
 - Controls for the char pair (new translator seed, swapped slots, a partner from another init): the one-way pattern holds:
   [`docs/toy-char-ctrl-results.md`](docs/toy-char-ctrl-results.md).
+- Which channel carries prose into A: the MoE-sum signal and the residual stream do (2 seeds of 3), the per-expert bus doesn't:
+  [`docs/toy-char-channel-results.md`](docs/toy-char-channel-results.md).
 
 The real-model work packages (WP1 loader, WP2 collection, WP3, WP7-WP11) are specified
 in the work plan and intentionally **not** stubbed.

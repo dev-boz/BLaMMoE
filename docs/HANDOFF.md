@@ -101,8 +101,14 @@ seed 1):** the one-way pattern holds with a new translator seed, swapped slots (
 from another init (g units). A prose = control partner (-0.018 bits/char, attraction +0.002 but wrong
 pull +0.002); A' code -0.10..-0.14 vs A'+A' control -0.024, attraction +0.014..+0.024 (9/9) vs 0.
 Gain size per unit moves ~2x with translator seed: read means. Audit gate also fixed for unequal-
-length docs (reader past a shorter partner's end; audit artefact, not a leak; 2148ce3). Channel run
-(`configs/toy_char_channel.yaml`: MoE-sum signal, resid without the final link) queued after it.
+length docs (reader past a shorter partner's end; audit artefact, not a leak; 2148ce3). 
+**2026-11-01 channel run (`docs/toy-char-channel-results.md`, `configs/toy_char_channel.yaml`, 18/18
+PASS):** the one-way pattern is the PER-EXPERT BUS's. Via the MoE-sum signal A gets prose from A' in 2/3
+seeds (-0.17/-0.19 vs control -0.02, attraction +0.044/+0.048, A's rx gate opens -0.30/-0.34 on link
+3, first time ever); resid without the final link same (-0.13/-0.19, link 2). Seed 2 never opens A's
+reader on either. Eval-time ablation: all of it via the latest link, wrong partner +0.85..+1.25 bpc =
+a late hand-over again, not expert sharing. Proposed next (not agreed): non-zero gate start for A on
+the expert bus (opening vs combining).
 
 **Open problem for the end goal:** A never gets prose from B through the expert bus, at any
 setting. "Free transfer between experts" so far works one way only.
@@ -343,7 +349,8 @@ the write-ups.
 
 | doc | what |
 |---|---|
-| **`docs/toy-char-ctrl-results.md`** | **Newest.** 2026-11-01 controls for the char pair, translator seed 1, 15/15 gates PASS: the one-way pattern survives a new translator seed, swapped slots and an A' from another init. A on prose = control (-0.018), attraction +0.002 matched by wrong-partner pull; A' on code -0.10..-0.14 vs A'+A' control -0.024, attraction 9/9 above zero vs 0. Per-unit size moves ~2x with translator seed. |
+| **`docs/toy-char-channel-results.md`** | **Newest.** 2026-11-01 MoE-sum signal and resid without the final link on the char pairs, 18/18 PASS: A gets prose from A' in 2/3 seeds through both (-0.17/-0.19, -0.13/-0.19 vs control -0.02; A's reader gate opens for the first time), so the one-way pattern belongs to the per-expert bus. All via the latest link; wrong partner +0.85..+1.25 bpc = late hand-over. A' code larger on both (-0.18, -0.28). |
+| **`docs/toy-char-ctrl-results.md`** | 2026-11-01 controls for the char pair, translator seed 1, 15/15 gates PASS: the one-way pattern survives a new translator seed, swapped slots and an A' from another init. A on prose = control (-0.018), attraction +0.002 matched by wrong-partner pull; A' on code -0.10..-0.14 vs A'+A' control -0.024, attraction 9/9 above zero vs 0. Per-unit size moves ~2x with translator seed. |
 | **`docs/review-2026-10-31.md`** | 2026-10-31 outside review (Codex gpt-6-astra xhigh; raw report + scripts in `docs/review-2026-10-31/`): every translator shares one init + draw order (`fused.seed` 0) and the code model is always slot 1, so "direction effect" is unproven; `toward` = attraction minus wrong-partner pull (now split in partner_shift.json; B code attraction +0.039 vs toward +0.089; resid hand-over 84% wrong-partner damage); audit NaN pass fixed. Ranked next steps by size. |
 | **`docs/toy-char-pair-results.md`** | 2026-10-31 A + A' (prose-heavy char, same arch and init as A), 12/12 gates PASS: expert bus still gives A NO prose (= control partner, gates ~0.02), while A' gets code from A (-0.08..-0.20, like B) = a direction effect, not tokenizer/spread/reader arch. Residual stream char-char: near-total hand-over both ways (A prose 2.21 -> 1.92, last-link gates ~0.55, wrong partner 7.7 bits). |
 | **`docs/toy-different-results.md`** | 2026-10-30 CPU diagnostics, no training: a "different because of the partner" measure (toward = real partner pulls predictions to the partner's own view more than a wrong partner; separates real transfer from the lam-50 reward's damage); B on prose is different-not-better (3/3); A-side gap = A's expert-bus reader stays shut (gates ~0.02 vs B's 0.09-0.21); B's prose IS in its experts (layer-0 MoE carries half its advantage) but spread thin over 64 small experts. Next: A + A' (char, prose-heavy) pair. |

@@ -55,7 +55,7 @@ What did change is the size, from one translator seed to the next. e1 got -0.201
 
 Side note: both controls give a small gain on the reader's weak domain (A on prose -0.018, A' on code -0.024) with zero attraction. That's the general "any partner helps a bit" effect, not knowledge, and it's the baseline the real gains need to beat.
 
-It still doesn't say why prose doesn't travel. That's the channel run, queued after this one (`configs/toy_char_channel.yaml`: MoE-sum signal, and residual stream without the final link). And the usual caveats apply: toy models, one data mix, 48 test windows per domain.
+It still doesn't say why prose doesn't travel. That's the [channel run](toy-char-channel-results.md) (MoE-sum signal, and residual stream without the final link): prose does get into A through a summed late channel, so the block is the per-expert bus. And the usual caveats apply: toy models, one data mix, 48 test windows per domain.
 
 ## Reproduce
 
