@@ -88,6 +88,8 @@ bootstrap statistics, a hardware probe, and a toy end-to-end programme:
   [`docs/toy-char-ctrl-results.md`](docs/toy-char-ctrl-results.md).
 - Which channel carries prose into A: the MoE-sum signal and the residual stream do (2 seeds of 3), the per-expert bus doesn't:
   [`docs/toy-char-channel-results.md`](docs/toy-char-channel-results.md).
+- Start A's gates open: prose goes into A through the expert bus after all (the one-way pattern was the zero gate start):
+  [`docs/toy-char-gate-results.md`](docs/toy-char-gate-results.md).
 
 The real-model work packages (WP1 loader, WP2 collection, WP3, WP7-WP11) are specified
 in the work plan and intentionally **not** stubbed.

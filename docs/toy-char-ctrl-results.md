@@ -1,5 +1,7 @@
 # Controls for the char pair: the one-way pattern holds
 
+> **Update, 2026-11-01.** The one-way pattern turned out to be a starting-point problem. A's expert-bus reader never opened from a zero gate. Started part-open, it takes prose from A' in all 3 seeds ([gate start](toy-char-gate-results.md)).
+
 ## Why this
 
 The [outside review](review-2026-10-31.md) pointed out that every translator so far started from the same initialisation and training order (`fused.seed` 0), and the code-heavy model was always in the first slot. So the char-pair pattern (A' gets code from A through the expert bus, A gets no prose from A') could have come from that shared start or from the slot order. This run is review step 1: the same unforced expert-bus recipe, with those two things changed and two new partners.

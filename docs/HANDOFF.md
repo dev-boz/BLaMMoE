@@ -3,7 +3,7 @@
 For whoever picks this up next, human or agent. Read `CLAUDE.md` first (working agreement).
 `main` has the toy programme (PR #1 merged). The audit fixes, the seed sweep and its write-up
 and everything since (complementary models, the allow/force dials, the char pair, the outside review) are on local branch
-**`audit-fixes`** (committed, NEVER pushed; don't push unless the owner asks). 117 tests pass:
+**`audit-fixes`** (committed, NEVER pushed; don't push unless the owner asks). 118 tests pass:
 `CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python -m pytest -q` (the venv is `.venv`).
 
 ## Project goal (from the owner)
@@ -109,6 +109,13 @@ seeds (-0.17/-0.19 vs control -0.02, attraction +0.044/+0.048, A's rx gate opens
 reader on either. Eval-time ablation: all of it via the latest link, wrong partner +0.85..+1.25 bpc =
 a late hand-over again, not expert sharing. Proposed next (not agreed): non-zero gate start for A on
 the expert bus (opening vs combining).
+
+**2026-11-01 gate start (`docs/toy-char-gate-results.md`, `configs/toy_char_gate.yaml`, 6/6 PASS):**
+it was OPENING. A's expert-bus readers started at tanh 0.3 (`gate_start_a`, `FusedPair.start_gates`)
+-> A gets prose from A' in 3/3 (-0.185/-0.204/-0.195 vs gate-started A+A control -0.03; attraction
++0.045..+0.050 vs 0); A's link-3 gate grows 0.30 -> ~0.58, links 0-2 close; control closes all. Still
+all via link 3 and wrong partner +0.9..+1.2 bpc = last-layer hand-over. Direction effect is dead. Next
+ideas (not agreed): gate start without the last link; which A' experts A reads at link 3; gate start on A-B.
 
 **Open problem for the end goal:** A never gets prose from B through the expert bus, at any
 setting. "Free transfer between experts" so far works one way only.
@@ -349,7 +356,8 @@ the write-ups.
 
 | doc | what |
 |---|---|
-| **`docs/toy-char-channel-results.md`** | **Newest.** 2026-11-01 MoE-sum signal and resid without the final link on the char pairs, 18/18 PASS: A gets prose from A' in 2/3 seeds through both (-0.17/-0.19, -0.13/-0.19 vs control -0.02; A's reader gate opens for the first time), so the one-way pattern belongs to the per-expert bus. All via the latest link; wrong partner +0.85..+1.25 bpc = late hand-over. A' code larger on both (-0.18, -0.28). |
+| **`docs/toy-char-gate-results.md`** | **Newest.** 2026-11-01 A's expert-bus readers start part-open (0.3), 6/6 PASS: A gets prose from A' in 3/3 (-0.19..-0.20 vs control -0.03), so the one-way pattern was the zero gate start. Still all via the last link; wrong partner +0.9..+1.2 bpc. |
+| **`docs/toy-char-channel-results.md`** | 2026-11-01 MoE-sum signal and resid without the final link on the char pairs, 18/18 PASS: A gets prose from A' in 2/3 seeds through both (-0.17/-0.19, -0.13/-0.19 vs control -0.02; A's reader gate opens for the first time), so the one-way pattern belongs to the per-expert bus. All via the latest link; wrong partner +0.85..+1.25 bpc = late hand-over. A' code larger on both (-0.18, -0.28). |
 | **`docs/toy-char-ctrl-results.md`** | 2026-11-01 controls for the char pair, translator seed 1, 15/15 gates PASS: the one-way pattern survives a new translator seed, swapped slots and an A' from another init. A on prose = control (-0.018), attraction +0.002 matched by wrong-partner pull; A' on code -0.10..-0.14 vs A'+A' control -0.024, attraction 9/9 above zero vs 0. Per-unit size moves ~2x with translator seed. |
 | **`docs/review-2026-10-31.md`** | 2026-10-31 outside review (Codex gpt-6-astra xhigh; raw report + scripts in `docs/review-2026-10-31/`): every translator shares one init + draw order (`fused.seed` 0) and the code model is always slot 1, so "direction effect" is unproven; `toward` = attraction minus wrong-partner pull (now split in partner_shift.json; B code attraction +0.039 vs toward +0.089; resid hand-over 84% wrong-partner damage); audit NaN pass fixed. Ranked next steps by size. |
 | **`docs/toy-char-pair-results.md`** | 2026-10-31 A + A' (prose-heavy char, same arch and init as A), 12/12 gates PASS: expert bus still gives A NO prose (= control partner, gates ~0.02), while A' gets code from A (-0.08..-0.20, like B) = a direction effect, not tokenizer/spread/reader arch. Residual stream char-char: near-total hand-over both ways (A prose 2.21 -> 1.92, last-link gates ~0.55, wrong partner 7.7 bits). |

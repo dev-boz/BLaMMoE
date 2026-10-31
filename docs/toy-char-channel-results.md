@@ -1,5 +1,7 @@
 # Which channel carries prose into A: not the expert bus
 
+> **Update, 2026-11-01 ([gate start](toy-char-gate-results.md)).** It was opening, not combining. With A's readers started part-open (0.3), A gets prose through the per-expert bus in all 3 seeds (-0.19 to -0.20 bits/char against -0.03 for the control), still all through the last link.
+
 ## Why this
 
 Through the per-expert bus, A has never got prose from a partner, and the [controls](toy-char-ctrl-results.md) show that holds under a new translator seed, swapped slots and a partner from another init. But through the full residual stream, A takes nearly everything from A' ([char pair](toy-char-pair-results.md)), mostly through the final link. So is the block "prose doesn't travel into a code model", or something about the per-expert bus? This run is review step 2: the same A + A' pairs and unforced recipe as the char pair (translator seed 0, so those runs are the comparison), on two new channels.
