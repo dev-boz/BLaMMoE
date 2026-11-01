@@ -1,0 +1,25 @@
+# Can middle-layer experts carry prose once they're open? (docs/toy-char-gate-results.md, next ideas)
+# toy_char_gate again (A's readers start at tanh 0.3, translator seed 0), but the expert bus has no
+# last link (links 0-2). With every link, all of A's gain came through link 3 and A's gates on 0-2
+# closed. If A still gets prose here, earlier experts can carry it; if the gain just moves to link 2
+# (as the residual stream's did) or goes, the transfer is a late hand-over only.
+#   e<i> = s_i's A + d_i's A';  f<i> = s_i's A + s_{i+1}'s A (A's control, same gate start)
+base: configs/toy_poc.yaml
+out_dir: results/toy_char_gate012   # symlink to the Data drive
+models_from: results/toy_complement
+seeds: [[0, 1], [2, 3], [4, 5]]
+variants: [ab_experts_012_rel_safe_text_ga3]
+rung2: false
+hide: false
+controls:                           # must match toy_complement.yaml: the pairs name its d units' models
+  - {name: c, keep: model_a, override: {model_b: {p_prose: 0.1}}}
+  - {name: d, keep: model_b, override: {model_a: {p_prose: 0.9}}}
+pairs:
+  - {name: e, model_a: [s, model_a], model_b: [d, model_a]}
+  - {name: f, model_a: [s, model_a], model_b: [s, model_a, 1]}
+overrides:
+  model_a: {p_prose: 0.1}
+  model_b: {p_prose: 0.9}
+  fused:
+    variants:
+      ab_experts_012_rel_safe_text_ga3: {pair: ab, links: [0, 1, 2], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.0, gate_start_a: 0.3}
