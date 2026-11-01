@@ -1,5 +1,7 @@
 # Start A's gates open: prose goes through the expert bus after all
 
+> **Update, 2026-11-02 ([follow-ups](toy-char-gate2-results.md)).** A reads A''s last layer as a set, not prose specialists. Without the last link A gets about half the prose with a fifth of the dependence. With BPE B it gets only a little.
+
 ## Why this
 
 The [channel run](toy-char-channel-results.md) showed A gets prose from A' through a summed MoE output or the residual stream, but never through the per-expert bus. That left two explanations:

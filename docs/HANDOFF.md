@@ -117,8 +117,19 @@ it was OPENING. A's expert-bus readers started at tanh 0.3 (`gate_start_a`, `Fus
 all via link 3 and wrong partner +0.9..+1.2 bpc = last-layer hand-over. Direction effect is dead. Next
 ideas (not agreed): gate start without the last link; which A' experts A reads at link 3; gate start on A-B.
 
-**Open problem for the end goal:** A never gets prose from B through the expert bus, at any
-setting. "Free transfer between experts" so far works one way only.
+**2026-11-02 gate follow-ups (`docs/toy-char-gate2-results.md`, `configs/toy_char_gate012.yaml`,
+`configs/toy_ab_gate.yaml`, 12/12 PASS):** A reads A''s last layer as a set (read ~ routing; hide 7/8 =
+whole gain). Links 0-2 with gate start: A prose -0.097/-0.124/-0.072 vs control -0.03, attraction 3/3,
+wrong partner only +0.06..+0.20 (link 3 gave ~+1.1), mostly via link 2 (gate holds 0.1-0.3, doesn't grow).
+A' code e1 low again (-0.042): a trade-off for that pair. A-B with gate start: A prose -0.04..-0.05 vs
+k control -0.03 (shut -0.014), attraction +0.009 3/3, no dependence, prose-specific part via link 3;
+B code unchanged. Same recipe gives -0.19 with char A', so the A-B gap is the tokenizer/architecture
+crossing. Overnight follow-up queued 11-02 00:43: both sides' gates start 0.3 (`configs/toy_char_gate2way.yaml`,
+`configs/toy_ab_gate2way.yaml`, results in results/toy_char_gate2way, results/toy_ab_gate2way).
+
+**Open problem for the end goal:** (updated 11-02) the one-way pattern was the zero gate start, but
+every working channel prefers the latest link, and A gets only a little prose from BPE B (-0.017 beyond
+control) against -0.16 from char A'. Crossing tokenizers is now the main gap.
 
 **Next options (owner to pick; none agreed yet):**
 - (a) Fair forcing at p_split 0.01-0.02: does free transfer return towards unforced while recall
@@ -356,7 +367,8 @@ the write-ups.
 
 | doc | what |
 |---|---|
-| **`docs/toy-char-gate-results.md`** | **Newest.** 2026-11-01 A's expert-bus readers start part-open (0.3), 6/6 PASS: A gets prose from A' in 3/3 (-0.19..-0.20 vs control -0.03), so the one-way pattern was the zero gate start. Still all via the last link; wrong partner +0.9..+1.2 bpc. |
+| **`docs/toy-char-gate2-results.md`** | **Newest.** 2026-11-02 three follow-ups to the gate start, 12/12 PASS. Which experts (CPU): A reads A''s link-3 experts in proportion to routing, not prose specialists; single-hide costs sum to 2x the gain. Links 0-2 only: A prose -0.07..-0.12 vs control -0.03 with wrong partner only +0.06..+0.20 (vs ~+1.1 with link 3), mostly link 2. A-B with A's gates at 0.3: A prose -0.04..-0.05 vs control -0.03 (shut -0.014), no dependence; char A' gives -0.19 under the same recipe, so the A-side gap is crossing tokenizers/architectures, not B lacking prose. |
+| **`docs/toy-char-gate-results.md`** | 2026-11-01 A's expert-bus readers start part-open (0.3), 6/6 PASS: A gets prose from A' in 3/3 (-0.19..-0.20 vs control -0.03), so the one-way pattern was the zero gate start. Still all via the last link; wrong partner +0.9..+1.2 bpc. |
 | **`docs/toy-char-channel-results.md`** | 2026-11-01 MoE-sum signal and resid without the final link on the char pairs, 18/18 PASS: A gets prose from A' in 2/3 seeds through both (-0.17/-0.19, -0.13/-0.19 vs control -0.02; A's reader gate opens for the first time), so the one-way pattern belongs to the per-expert bus. All via the latest link; wrong partner +0.85..+1.25 bpc = late hand-over. A' code larger on both (-0.18, -0.28). |
 | **`docs/toy-char-ctrl-results.md`** | 2026-11-01 controls for the char pair, translator seed 1, 15/15 gates PASS: the one-way pattern survives a new translator seed, swapped slots and an A' from another init. A on prose = control (-0.018), attraction +0.002 matched by wrong-partner pull; A' on code -0.10..-0.14 vs A'+A' control -0.024, attraction 9/9 above zero vs 0. Per-unit size moves ~2x with translator seed. |
 | **`docs/review-2026-10-31.md`** | 2026-10-31 outside review (Codex gpt-6-astra xhigh; raw report + scripts in `docs/review-2026-10-31/`): every translator shares one init + draw order (`fused.seed` 0) and the code model is always slot 1, so "direction effect" is unproven; `toward` = attraction minus wrong-partner pull (now split in partner_shift.json; B code attraction +0.039 vs toward +0.089; resid hand-over 84% wrong-partner damage); audit NaN pass fixed. Ranked next steps by size. |

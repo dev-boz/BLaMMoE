@@ -1,6 +1,8 @@
 """One-off CPU check for docs/toy-char-channel-results.md: per-link eval-time ablation of the e units
 (A prose, A' code) plus strong-domain costs. Run from the repo root with PYTHONPATH=. (~15 min).
-Args: [results root] [variant ...]; defaults are the channel run's."""
+Args: [results root] [variant ...]; defaults are the channel run's. UNITS=b0,b1,b2 picks other units
+(slot 2 is still printed as A')."""
+import os
 import sys
 from pathlib import Path
 import torch
@@ -13,7 +15,7 @@ from blammoe.toy.moe import load
 torch.set_num_threads(8)
 root = Path(sys.argv[1] if len(sys.argv) > 1 else "results/toy_char_channel")
 for var in sys.argv[2:] or ["ab_moe_all_rel_safe_text", "ab_resid_012_rel_safe_text"]:
-    for u in ["e0", "e1", "e2"]:
+    for u in os.environ.get("UNITS", "e0,e1,e2").split(","):
         unit = root / u
         cfg = ToyPOCConfig.from_yaml(unit / "config.yaml"); fs, L = cfg.fused, cfg.seq_chars; v = fs.variants[var]
         tok_a, tok_b = setup.tokenizer(cfg.model_a, cfg), setup.tokenizer(cfg.model_b, cfg)

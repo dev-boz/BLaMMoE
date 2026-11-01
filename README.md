@@ -90,6 +90,8 @@ bootstrap statistics, a hardware probe, and a toy end-to-end programme:
   [`docs/toy-char-channel-results.md`](docs/toy-char-channel-results.md).
 - Start A's gates open: prose goes into A through the expert bus after all (the one-way pattern was the zero gate start):
   [`docs/toy-char-gate-results.md`](docs/toy-char-gate-results.md).
+- After the gate start: A reads A''s last layer as a set; without the last link it gets half the prose with a fifth of the dependence; from BPE B it gets only a little:
+  [`docs/toy-char-gate2-results.md`](docs/toy-char-gate2-results.md).
 
 The real-model work packages (WP1 loader, WP2 collection, WP3, WP7-WP11) are specified
 in the work plan and intentionally **not** stubbed.
