@@ -127,6 +127,14 @@ B code unchanged. Same recipe gives -0.19 with char A', so the A-B gap is the to
 crossing. Overnight follow-up queued 11-02 00:43: both sides' gates start 0.3 (`configs/toy_char_gate2way.yaml`,
 `configs/toy_ab_gate2way.yaml`, results in results/toy_char_gate2way, results/toy_ab_gate2way).
 
+**2026-11-02 both sides open (`docs/toy-char-gate3-results.md`, configs toy_char_gate2way / toy_ab_gate2way
+/ toy_char_gate2way012, 27/27 PASS):** two-way transfer works at once on A+A' (all links: A prose -0.19..-0.20,
+A' code -0.22..-0.32, but both depend on the other, wrong partner +0.7..+1.3, all via link 3). Links 0-2
+both open: A -0.110/-0.121/-0.079 (f -0.03), A' -0.214/-0.116/-0.142 (h -0.057), attraction 3/3 both,
+wrong partner +0.06..+0.38, mostly link 2 = the setting to build on. A-B both open: A unchanged, B +0.03
+raw but its control +0.05 (generic). Suggested next (not agreed): build on links 0-2 both open (e.g. push
+it off the latest link, or the small-level pilot); attack the tokenizer crossing for A-B.
+
 **Open problem for the end goal:** (updated 11-02) the one-way pattern was the zero gate start, but
 every working channel prefers the latest link, and A gets only a little prose from BPE B (-0.017 beyond
 control) against -0.16 from char A'. Crossing tokenizers is now the main gap.
@@ -367,7 +375,8 @@ the write-ups.
 
 | doc | what |
 |---|---|
-| **`docs/toy-char-gate2-results.md`** | **Newest.** 2026-11-02 three follow-ups to the gate start, 12/12 PASS. Which experts (CPU): A reads A''s link-3 experts in proportion to routing, not prose specialists; single-hide costs sum to 2x the gain. Links 0-2 only: A prose -0.07..-0.12 vs control -0.03 with wrong partner only +0.06..+0.20 (vs ~+1.1 with link 3), mostly link 2. A-B with A's gates at 0.3: A prose -0.04..-0.05 vs control -0.03 (shut -0.014), no dependence; char A' gives -0.19 under the same recipe, so the A-side gap is crossing tokenizers/architectures, not B lacking prose. |
+| **`docs/toy-char-gate3-results.md`** | **Newest.** 2026-11-02 both sides' readers start at 0.3, 27/27 PASS. A+A' all links: A prose -0.19..-0.20 AND A' code -0.22..-0.32 at once (controls -0.03 / -0.07), seed-1 'trade-off' gone, but a mutual last-layer swap (link 3 gates ~0.55-0.6, wrong partner +0.7..+1.3). Links 0-2: A -0.08..-0.12, A' -0.12..-0.21, wrong partner only +0.06..+0.38, mostly link 2 = best shape so far. A-B: B's side open adds only generic gain; A's gap unchanged. |
+| **`docs/toy-char-gate2-results.md`** | 2026-11-02 three follow-ups to the gate start, 12/12 PASS. Which experts (CPU): A reads A''s link-3 experts in proportion to routing, not prose specialists; single-hide costs sum to 2x the gain. Links 0-2 only: A prose -0.07..-0.12 vs control -0.03 with wrong partner only +0.06..+0.20 (vs ~+1.1 with link 3), mostly link 2. A-B with A's gates at 0.3: A prose -0.04..-0.05 vs control -0.03 (shut -0.014), no dependence; char A' gives -0.19 under the same recipe, so the A-side gap is crossing tokenizers/architectures, not B lacking prose. |
 | **`docs/toy-char-gate-results.md`** | 2026-11-01 A's expert-bus readers start part-open (0.3), 6/6 PASS: A gets prose from A' in 3/3 (-0.19..-0.20 vs control -0.03), so the one-way pattern was the zero gate start. Still all via the last link; wrong partner +0.9..+1.2 bpc. |
 | **`docs/toy-char-channel-results.md`** | 2026-11-01 MoE-sum signal and resid without the final link on the char pairs, 18/18 PASS: A gets prose from A' in 2/3 seeds through both (-0.17/-0.19, -0.13/-0.19 vs control -0.02; A's reader gate opens for the first time), so the one-way pattern belongs to the per-expert bus. All via the latest link; wrong partner +0.85..+1.25 bpc = late hand-over. A' code larger on both (-0.18, -0.28). |
 | **`docs/toy-char-ctrl-results.md`** | 2026-11-01 controls for the char pair, translator seed 1, 15/15 gates PASS: the one-way pattern survives a new translator seed, swapped slots and an A' from another init. A on prose = control (-0.018), attraction +0.002 matched by wrong-partner pull; A' on code -0.10..-0.14 vs A'+A' control -0.024, attraction 9/9 above zero vs 0. Per-unit size moves ~2x with translator seed. |

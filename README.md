@@ -92,6 +92,8 @@ bootstrap statistics, a hardware probe, and a toy end-to-end programme:
   [`docs/toy-char-gate-results.md`](docs/toy-char-gate-results.md).
 - After the gate start: A reads A''s last layer as a set; without the last link it gets half the prose with a fifth of the dependence; from BPE B it gets only a little:
   [`docs/toy-char-gate2-results.md`](docs/toy-char-gate2-results.md).
+- Both sides open: two-way transfer at once; on links 0-2 it keeps half the gain with little partner dependence; A-B unchanged:
+  [`docs/toy-char-gate3-results.md`](docs/toy-char-gate3-results.md).
 
 The real-model work packages (WP1 loader, WP2 collection, WP3, WP7-WP11) are specified
 in the work plan and intentionally **not** stubbed.
