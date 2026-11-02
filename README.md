@@ -94,7 +94,7 @@ bootstrap statistics, a hardware probe, and a toy end-to-end programme:
   [`docs/toy-char-gate2-results.md`](docs/toy-char-gate2-results.md).
 - Both sides open: two-way transfer at once; on links 0-2 it keeps half the gain with little partner dependence; A-B unchanged:
   [`docs/toy-char-gate3-results.md`](docs/toy-char-gate3-results.md).
-- Links 0-2 both open holds at a second translator seed and with other-init partners; with links 0-1 only, A gets no prose:
+- Links 0-2 both open holds at a second translator seed and with other-init partners; with links 0-1 only, A gets no prose; link dropout cuts dependence but doesn't spread A's prose off the latest link:
   [`docs/toy-char-gate4-results.md`](docs/toy-char-gate4-results.md).
 
 The real-model work packages (WP1 loader, WP2 collection, WP3, WP7-WP11) are specified

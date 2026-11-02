@@ -1,4 +1,4 @@
-# Both sides open, links 0-2: does it hold up, and how early can it go?
+# Both sides open, links 0-2: does it hold up, how early can it go, and does link dropout spread it?
 
 ## Why this
 
@@ -63,15 +63,46 @@ Eval-time ablation, A' on code:
 
 So A''s code mostly comes through link 1, the later of the two, except in e2 where it splits. Over three runs the pattern is the same: whatever links are on offer, the translator uses the latest one. But how much gets across depends on how deep that link is. Link 3 gives about 0.17 of prose beyond the control, link 2 about 0.08, link 1 nothing. Code into A' falls off more slowly: about 0.19, 0.10 and 0.04.
 
+## Result 3 - link dropout: less dependence, but it doesn't spread A's prose over depth
+
+`configs/toy_char_gate2way_drop.yaml` - same as the both-open runs (translator seed 0, units e, f, h), but during training each link is switched off with probability 0.5 at every step (`link_drop`, its own seeded RNG, so the torch draws don't change). One variant has all links, one has links 0-2. At eval every link is on. All 18 translators passed the leak check (125 minutes on both cards). The idea was that a translator that can't count on the latest link would have to learn to use the others as well.
+
+| | A on prose | A' on code | Wrong partner, A / A' |
+|---|---|---|---|
+| All links, no dropout (gate3) | -0.187 / -0.197 / -0.199 | -0.321 / -0.224 / -0.242 | +0.86 / +1.26 / +1.03, +1.11 / +0.82 / +0.68 |
+| **All links, dropout 0.5** | **-0.158 / -0.177 / -0.167** | **-0.257 / -0.185 / -0.201** | **+0.53 / +0.75 / +0.65, +0.78 / +0.57 / +0.42** |
+| Links 0-2, no dropout (gate3) | -0.110 / -0.121 / -0.079 | -0.214 / -0.116 / -0.142 | +0.17 / +0.17 / +0.06, +0.38 / +0.09 / +0.16 |
+| **Links 0-2, dropout 0.5** | **-0.053 / -0.066 / -0.063** | **-0.154 / -0.092 / -0.104** | **+0.02 / +0.03 / +0.03, +0.14 / +0.04 / +0.06** |
+| Controls, dropout (f / h) | -0.020 to -0.031 | -0.03 to -0.05, mean -0.040 | about 0 |
+
+Attraction is above zero in all 12 e rows (A +0.010 to +0.042, A' +0.013 to +0.045). The f controls are zero, and h is zero apart from three small ones (+0.003 at most).
+
+Eval-time ablation:
+
+| | A on prose, all but the latest link | A' on code, all but the latest link |
+|---|---|---|
+| All links, no dropout (all but link 3) | -0.008 / +0.005 / +0.003 | -0.070 / +0.018 / +0.002 |
+| **All links, dropout (all but link 3)** | **-0.020 / -0.020 / -0.023** | **-0.123 / -0.063 / -0.083** |
+| Links 0-2, no dropout (all but link 2) | -0.019 / -0.017 / -0.024 | -0.011 / -0.038 / -0.033 |
+| **Links 0-2, dropout (all but link 2)** | **-0.024 / -0.022 / -0.021** | **-0.054 / -0.045 / -0.039** |
+
+For A it didn't work. Without the latest link A gets the control's general gain and nothing more, with or without dropout. A's link-3 gate still opened to 0.53-0.57, and its links 0-2 stayed at 0.06-0.10, the same as the controls. Half the time training couldn't use link 3, and A's reader learnt to wait for it rather than find prose somewhere else.
+
+A' did spread a little. With all links, A''s code without link 3 went from about nothing to -0.06 to -0.12, mostly through link 2 (only link 2: -0.108 / -0.045 / -0.069), and its link-2 gate stayed open at 0.21-0.33. With links 0-2, link 1 picked up a small share (only link 1: -0.041 / -0.032 / -0.019). That fits Result 2: the early layers have something for A' (code from A) and nothing for A (prose from A').
+
+What dropout mostly does is turn down the whole exchange. Gain and dependence fall together. With all links the gain drops by 10-20% and the wrong-partner cost by about a third. With links 0-2 the gain beyond the control halves (A about 0.035 instead of 0.08) and the wrong-partner cost almost disappears for A (+0.02 to +0.03). Per bit gained, links 0-2 with dropout is the least partner-dependent two-way transfer I've had. But I could already trade gain for dependence by picking links, and dropout doesn't buy anything new for A. Strong-domain costs went up a little: A on code +0.007 to +0.014 (no dropout: up to +0.010), A' on prose up to +0.015.
+
+One more detail. The dropout RNG is seeded with the translator seed, so every unit in a variant saw the same drop pattern. That's fine for comparing e with its controls, but a second drop seed would tell me whether the pattern matters.
+
 ## What this does and doesn't show
 
 Links 0-2 with both sides open is now checked the same way the one-way result was: a second translator seed, and partners from another init. It holds on both, close to unit for unit. That's the setting I'll build on.
 
 Taking link 2 away as well doesn't spread the transfer into links 0-1. A just stops getting prose. So the "latest link" habit isn't only the translator being lazy. At toy size the early layers of A' don't seem to carry much prose that A can use. What they do carry goes one way, A to A', with no dependence. That's the same direction the residual stream favoured in the [channel run](toy-char-channel-results.md).
 
-The next question is whether training can make the translator use several links at once when it has the late ones too. That's the link-dropout run (Result 3, below, once it's in).
+Link dropout doesn't change that (Result 3). With half the training steps missing the latest link, A still takes prose only through the latest link, and just takes less of it. A''s code spreads a little, to the next link down. Dropout lowers dependence, but so does picking the links, and that's cheaper. So for A, getting prose out of the middle of A' isn't something the translator is choosing not to do. At toy size the middle layers just don't hold prose A can use. To test "experts sharing" in the middle I probably need bigger models, where middle layers specialise more. That's an argument for the small-level pilot.
 
-Caveats: toy models, 3 seeds, one gate start (0.3), one data mix, 48 test windows per domain.
+Caveats: toy models, 3 seeds, one gate start (0.3), one data mix, 48 test windows per domain. One dropout rate (0.5) and one drop seed.
 
 ## Reproduce
 
@@ -94,6 +125,16 @@ CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python docs/toy-char-channel/link
   results/toy_char_gate2way01 ab_experts_01_rel_safe_text_ga3b3
 UNITS=e0,e1,e2,g0,g1,g2 CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python docs/toy-char-channel/link_ablation.py \
   results/toy_char_gate2way012s1 ab_experts_012_rel_safe_text_ga3b3
+# Result 3 (link dropout); same pattern, units e f h
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=1 PYTHONPATH=. \
+  .venv/bin/python scripts/toy_sweep.py configs/toy_char_gate2way_drop.yaml 4 e0 f0 h0 e2 h2 &
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. \
+  .venv/bin/python scripts/toy_sweep.py configs/toy_char_gate2way_drop.yaml 4 e1 f1 h1 f2; wait
+CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python scripts/toy_sweep.py configs/toy_char_gate2way_drop.yaml 4 none
+CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python scripts/toy_partner_shift.py results/toy_char_gate2way_drop 8
+for v in ab_experts_all_rel_safe_text_ga3b3_ld5 ab_experts_012_rel_safe_text_ga3b3_ld5; do
+  CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python docs/toy-char-channel/link_ablation.py results/toy_char_gate2way_drop $v
+done
 ```
 
 I ran them through a queue script with the thermal guard (`~/cmp-tests/sweep-guard.sh <dir> <cfg> <tmux42> <tmux43>`) on each run. In the h units both slots are A', so A''s code is in both `m1_code` and `m2_code`. In the g units the A' "alone" number is that other-init A''s own.

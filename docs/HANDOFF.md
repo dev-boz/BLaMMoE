@@ -141,8 +141,11 @@ A -0.085/-0.118/-0.097, A' -0.211/-0.112/-0.140 (within 0.025 of seed 0); other-
 A -0.09..-0.13, A' -0.14..-0.18; wrong partner +0.11..+0.32; mostly link 2 again. e1's weak A' code is
 the pairing (fine in g). Links 0-1 only: A prose = control (-0.03), A' code -0.07..-0.11 vs h -0.045,
 no dependence, mostly link 1. So gain beyond control falls with the latest link: link 3 ~0.17, link 2
-~0.08, link 1 0 for A. Link-dropout run (configs/toy_char_gate2way_drop.yaml, results/toy_char_gate2way_drop)
-launched 11-03 01:28, write-up pending as gate4 Result 3.
+~0.08, link 1 0 for A. Link dropout 0.5 (configs/toy_char_gate2way_drop.yaml, gate4 Result 3, 18/18 PASS):
+A's prose still comes only via the latest link (all-but-latest = control); A' code spreads a little to the
+next link down. Gain and dependence fall together: all links A -0.16..-0.18, wrong +0.53..+0.75; links 0-2
+A -0.05..-0.07, wrong +0.02..+0.03 (least dependent per bit yet). Reading: at toy size A' middle layers
+hold little prose A can use -> argues for the small-level pilot. Nothing running.
 
 **Open problem for the end goal:** (updated 11-02) the one-way pattern was the zero gate start, but
 every working channel prefers the latest link, and A gets only a little prose from BPE B (-0.017 beyond
@@ -384,7 +387,7 @@ the write-ups.
 
 | doc | what |
 |---|---|
-| **`docs/toy-char-gate4-results.md`** | **Newest.** 2026-11-03, 21/21 PASS. Links 0-2 both open holds at translator seed 1 (within 0.025 of seed 0) and with other-init A' partners (A -0.09..-0.13, A' -0.14..-0.18, wrong partner +0.11..+0.32). Links 0-1 only: A gets nothing beyond control, A' a little (0.03-0.06), no dependence. The translator always uses the latest link; the gain shrinks with its depth. |
+| **`docs/toy-char-gate4-results.md`** | **Newest.** 2026-11-03, 39/39 PASS. Links 0-2 both open holds at translator seed 1 (within 0.025 of seed 0) and with other-init A' partners (A -0.09..-0.13, A' -0.14..-0.18, wrong partner +0.11..+0.32). Links 0-1 only: A gets nothing beyond control, A' a little (0.03-0.06), no dependence. The translator always uses the latest link; the gain shrinks with its depth. Link dropout 0.5 (18/18 PASS) lowers gain and dependence together but doesn't spread A's prose off the latest link; A' code spreads a little to link 2. |
 | **`docs/toy-char-gate3-results.md`** | 2026-11-02 both sides' readers start at 0.3, 27/27 PASS. A+A' all links: A prose -0.19..-0.20 AND A' code -0.22..-0.32 at once (controls -0.03 / -0.07), seed-1 'trade-off' gone, but a mutual last-layer swap (link 3 gates ~0.55-0.6, wrong partner +0.7..+1.3). Links 0-2: A -0.08..-0.12, A' -0.12..-0.21, wrong partner only +0.06..+0.38, mostly link 2 = best shape so far. A-B: B's side open adds only generic gain; A's gap unchanged. |
 | **`docs/toy-char-gate2-results.md`** | 2026-11-02 three follow-ups to the gate start, 12/12 PASS. Which experts (CPU): A reads A''s link-3 experts in proportion to routing, not prose specialists; single-hide costs sum to 2x the gain. Links 0-2 only: A prose -0.07..-0.12 vs control -0.03 with wrong partner only +0.06..+0.20 (vs ~+1.1 with link 3), mostly link 2. A-B with A's gates at 0.3: A prose -0.04..-0.05 vs control -0.03 (shut -0.014), no dependence; char A' gives -0.19 under the same recipe, so the A-side gap is crossing tokenizers/architectures, not B lacking prose. |
 | **`docs/toy-char-gate-results.md`** | 2026-11-01 A's expert-bus readers start part-open (0.3), 6/6 PASS: A gets prose from A' in 3/3 (-0.19..-0.20 vs control -0.03), so the one-way pattern was the zero gate start. Still all via the last link; wrong partner +0.9..+1.2 bpc. |
