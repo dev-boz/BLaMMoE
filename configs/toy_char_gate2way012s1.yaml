@@ -1,0 +1,27 @@
+# Robustness of the links-0-2 both-open result (docs/toy-char-gate3-results.md, Result 3)
+# toy_char_gate2way012 at translator seed 1 (new init + training draw order), plus g units: A with an A'
+# from another init. Same checks the one-way result got in toy_char_ctrl.
+#   e<i> = s_i's A + d_i's A';  g<i> = s_i's A + d_{i+1}'s A' (other-init partner);  f<i> = s_i's A + s_{i+1}'s A (A's control);
+#   h<i> = d_i's A' + d_{i+1}'s A' (A''s control). All with both gate starts.
+base: configs/toy_poc.yaml
+out_dir: results/toy_char_gate2way012s1  # symlink to the Data drive
+models_from: results/toy_complement
+seeds: [[0, 1], [2, 3], [4, 5]]
+variants: [ab_experts_012_rel_safe_text_ga3b3]
+rung2: false
+hide: false
+controls:                           # must match toy_complement.yaml: the pairs name its d units' models
+  - {name: c, keep: model_a, override: {model_b: {p_prose: 0.1}}}
+  - {name: d, keep: model_b, override: {model_a: {p_prose: 0.9}}}
+pairs:
+  - {name: e, model_a: [s, model_a], model_b: [d, model_a]}
+  - {name: g, model_a: [s, model_a], model_b: [d, model_a, 1]}
+  - {name: f, model_a: [s, model_a], model_b: [s, model_a, 1]}
+  - {name: h, model_a: [d, model_a], model_b: [d, model_a, 1]}
+overrides:
+  model_a: {p_prose: 0.1}
+  model_b: {p_prose: 0.9}
+  fused:
+    seed: 1                         # translator init + training draw order (toy_char_gate2way012: 0)
+    variants:
+      ab_experts_012_rel_safe_text_ga3b3: {pair: ab, links: [0, 1, 2], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.0, gate_start_a: 0.3, gate_start_b: 0.3}
