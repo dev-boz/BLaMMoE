@@ -50,18 +50,23 @@ def mixed_draw(prose: str, code: str, L: int, p_split: float, seed: int):
 def train_fused(
     pair: FusedPair, tok1, tok2, draw: Callable, L: int, *, steps: int, batch_size: int, lr: float,
     answer_weight: float, log: Callable[[str], None] = print, log_every: int = 100, warmup: int = 0,
-    reward_lam: float = 0.0, answer_in_mean: bool = False, **run_kw,
+    reward_lam: float = 0.0, answer_in_mean: bool = False, link_drop: float = 0.0, link_drop_seed: int = 0,
+    **run_kw,
 ) -> list[dict]:
     """``warmup`` > 0: linear warmup then cosine decay (for links that are already trained:
     a fresh Adam's first full-size steps knock them off). ``reward_lam`` > 0: tokens the fusion
     gets right only because of the partner (alone and with a wrong-document partner both miss,
     blammoe/toy/reward.py) count 1 + reward_lam in the CE mean; the log adds their share
     (``win_rate``, per model). ``answer_in_mean``: see fused.pair_loss. ``run_kw`` go to every
-    forward, e.g. ``ablate`` to train with an expert hidden."""
+    forward, e.g. ``ablate`` to train with an expert hidden. ``link_drop`` > 0: each step switches
+    each link off with that probability (its own ``random.Random(link_drop_seed)``, so the torch draws
+    match a run without it), so the translator can't lean on one link alone; the log adds the
+    step's ``dropped`` links."""
     dev = device_of(pair)
     opt = torch.optim.AdamW(pair.bridge_parameters(), lr=lr, weight_decay=0.0)
     all_links = frozenset(int(k) for k in pair.links)
     history = []
+    drop_rng = random.Random(link_drop_seed)
     for step in range(steps):
         if warmup:
             for g in opt.param_groups:
@@ -69,7 +74,8 @@ def train_fused(
         items = draw(batch_size)
         b1 = make_batch([x for x, _ in items], tok1, L, device=dev)
         b2 = make_batch([y for _, y in items], tok2, L, device=dev)
-        l1, l2 = run_pair(pair, b1, b2, **run_kw)
+        dropped = frozenset(l for l in sorted(all_links) if drop_rng.random() < link_drop) if link_drop else frozenset()
+        l1, l2 = run_pair(pair, b1, b2, disabled=dropped, **run_kw) if dropped else run_pair(pair, b1, b2, **run_kw)
         wins = (None, None)
         if reward_lam:
             with torch.no_grad():
@@ -79,12 +85,15 @@ def train_fused(
         loss = (pair_loss(l1, b1, answer_weight, wins[0], reward_lam, answer_in_mean)
                 + pair_loss(l2, b2, answer_weight, wins[1], reward_lam, answer_in_mean))
         opt.zero_grad(set_to_none=True)
-        loss.backward()
-        opt.step()
+        if loss.requires_grad:  # every link dropped: nothing in the translator to train this step
+            loss.backward()
+            opt.step()
         if step % log_every == 0 or step == steps - 1:
             gates = {k: [round(float(torch.tanh(lk.rx_a.gate.detach())), 3),
                          round(float(torch.tanh(lk.rx_b.gate.detach())), 3)] for k, lk in pair.links.items()}
             rec = {"step": step, "loss": round(float(loss.detach()), 4), "gates": gates}
+            if link_drop:
+                rec["dropped"] = sorted(dropped)
             if reward_lam:
                 rec["win_rate"] = [round(float(w.sum() / (b.targets != -100).sum()), 4)
                                    for w, b in zip(wins, (b1, b2))]

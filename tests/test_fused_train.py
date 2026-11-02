@@ -272,3 +272,33 @@ def test_start_gates_opens_one_side_and_leaves_the_init_alone():
     hist = train_fused(p1, ta, tb, mixed_draw(PROSE, CODE, L, 0.5, seed=1), L, steps=2, batch_size=2,
                        lr=1e-2, answer_weight=1.0, log=lambda m: None, log_every=1)
     assert all(abs(g[0] - 0.1) < 0.05 and abs(g[1] - 0.2) < 0.05 for g in hist[0]["gates"].values())
+
+
+def test_link_drop_switches_links_off_without_touching_the_torch_draws():
+    """link_drop: each step drops each link with that probability from its own seeded RNG (logged),
+    0 is the plain run, the torch RNG ends where a plain run's does, and dropping every link
+    trains nothing."""
+    draw = lambda: mixed_draw(PROSE, CODE, L, 0.5, seed=1)  # noqa: E731
+    kw = dict(steps=6, batch_size=2, lr=1e-2, answer_weight=1.0, log=lambda m: None, log_every=1)
+    runs, states = {}, {}
+    for name, extra in (("plain", {}), ("zero", {"link_drop": 0.0}), ("half", {"link_drop": 0.5, "link_drop_seed": 3}),
+                        ("half_again", {"link_drop": 0.5, "link_drop_seed": 3})):
+        torch.manual_seed(7)
+        pair, ta, tb = pair_and_toks()
+        pair.start_gates(0.3, 0.3)
+        runs[name] = train_fused(pair, ta, tb, draw(), L, **kw, **extra)
+        states[name] = torch.random.get_rng_state()
+    assert [r["loss"] for r in runs["plain"]] == [r["loss"] for r in runs["zero"]]
+    assert all("dropped" not in r for r in runs["plain"])
+    dropped = [r["dropped"] for r in runs["half"]]
+    assert dropped == [r["dropped"] for r in runs["half_again"]]
+    assert any(d for d in dropped) and any(len(d) < 2 for d in dropped)
+    assert all(set(d) <= {0, 1} for d in dropped)
+    assert all(torch.equal(states["plain"], st) for st in states.values())
+
+    pair, ta, tb = pair_and_toks()
+    pair.start_gates(0.3, 0.3)
+    before = {k: v.clone() for k, v in pair.links.state_dict().items()}
+    hist = train_fused(pair, ta, tb, draw(), L, **kw, link_drop=1.0)
+    assert all(r["dropped"] == [0, 1] for r in hist)
+    assert all(torch.equal(before[k], v) for k, v in pair.links.state_dict().items())

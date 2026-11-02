@@ -57,7 +57,8 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
                                                          seed=4242 + fs.seed), L,
                           steps=v.get("steps", fs.steps), batch_size=fs.batch_size, lr=fs.lr,
                           answer_weight=v.get("answer_weight", fs.answer_weight), reward_lam=v.get("reward_lam", 0.0),
-                          answer_in_mean=v.get("answer_in_mean", False), log=log)
+                          answer_in_mean=v.get("answer_in_mean", False), link_drop=v.get("link_drop", 0.0),
+                          link_drop_seed=fs.seed, log=log)
 
     # ---------------- evaluation (held-out seeds)
     splits = split_eval_set(L)
