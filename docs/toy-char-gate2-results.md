@@ -38,9 +38,11 @@ Per e unit of the gate-start run, on the prose test windows (`docs/toy-char-gate
 
 A reads A''s experts roughly in proportion to routing, no expert above 1.4x. Hiding the top 4 takes most of the gain, and hiding 7 of 8 takes all of it. Single-hide costs add up to about twice the gain, so the experts back each other up rather than each carrying its own piece. Blanking all of them to their code-side mean is worse than no partner at all.
 
-I also checked whether A leans on A''s prose specialists. That's the Spearman between an expert's hide cost (per unit of read share) and how much more A' routes to it on prose than on code: -0.05, 0.64 and 0.46. None of those is significant with 8 experts, and one has the wrong sign.
+I also checked whether A leans on A''s prose specialists, with a Spearman between each expert's hide cost and how much more A' routes to it on prose than on code.
 
-So A isn't picking out the experts that know prose. It reads A''s last layer whole, which fits the "late hand-over" picture.
+> **Correction, 2026-11-02.** The numbers I first gave here (-0.05, 0.64, 0.46) depend a lot on how the cost and the specialisation are defined, and I couldn't rebuild them exactly. Across six reasonable definitions (hide cost raw, per read share or per routing share; specialisation as prose minus code share or log ratio), the rank correlation is -0.05 to +0.43 in e0, +0.00 to +0.90 in e1 (p = 0.004 at the top), and +0.14 to +0.52 in e2. So at link 3 there may be a mild lean towards prose specialists, mostly in e1. Eight experts can't settle it. At link 2 ([both open, links 0-2](toy-char-gate3-results.md)) there's no lean at all.
+
+So A mostly isn't picking out the experts that know prose (with the caveat above). It reads A''s last layer roughly whole, which fits the "late hand-over" picture.
 
 ## Result 2 - without the last link, half the gain and much less dependence
 

@@ -88,11 +88,28 @@ Eval-time ablation (A on prose / A' on code):
 
 It's mostly link 2, the latest link on offer, but links 0-1 carry a bit more than in any all-links run, mainly for A''s code in e1 and e2. The gates agree. Link 2 ended at 0.26 / 0.21 / 0.10 for A and 0.51 / 0.24 / 0.30 for A'. Links 0-1 sit at 0.03-0.11, and the controls close everything. Strong-domain costs are small: A on code +0.004 to +0.010, A' on prose at most +0.012.
 
+## Result 4 - at link 2, A still reads the layer as a set
+
+The [which-experts check](toy-char-gate2-results.md) again (CPU, `docs/toy-char-gate/which_experts.py`), now at link 2 on the both-open links-0-2 translators, A reading A' on prose:
+
+| | e0 | e1 | e2 | Link 3, A only open (for comparison) |
+|---|---|---|---|---|
+| Gain | -0.110 | -0.121 | -0.079 | -0.19 to -0.20 |
+| Read ratio, range over experts | 0.65-1.17 | 0.83-1.21 | 0.52-1.30 | 0.51-1.37 |
+| Null slot share | 18% | 4% | 0% | 27-31% |
+| Hide the 4 most-read, share of gain | 91% | 82% | 89% | 83-117% |
+| Single-hide costs summed, over gain | 1.35x | 1.53x | 1.14x | 1.76-1.92x |
+| Rank correlation with prose specialisation | -0.67 to +0.12 | -0.10 to +0.19 | -0.07 to +0.29 | -0.05 to +0.90 |
+
+The rank correlation is the range over six ways of defining it (see the correction in the gate2 doc).
+
+Same picture as link 3. A reads A''s experts roughly in proportion to how often A' routes to them, and it doesn't lean towards the prose ones. Two things are different. A almost never looks at the null slot, so it reads its partner nearly all the time. And the experts back each other up less: single-hide costs add up to 1.1-1.5x the gain, against about 1.8x at link 3, so each expert carries more of its own piece. Still, that's a layer being read, not particular experts being picked.
+
 ## What this does and doesn't show
 
 The gate start fixes the one-way problem completely on the same-tokenizer pair. Both directions work at once, at full size, in every seed. Neither one costs the other anything. The "trade-off" in seed 1 was a reader that never opened.
 
-What I get, though, is two models handing each other their last layers. Each side comes to lean on the other: a wrong partner costs +0.7 to +1.3 bits/char. For the end goal of experts sharing freely, that's the wrong shape. Leaving out the last link changes the shape (Result 3). Both directions still work at once, with about half the gain and a small fraction of the dependence. Most of it still goes through the latest link available, so the translator's taste for "as late as possible" is still there. But at link 2, two middle layers are exchanging expert outputs, and neither model leans on the other much. For the end goal, that's the setting to build on.
+What I get, though, is two models handing each other their last layers. Each side comes to lean on the other: a wrong partner costs +0.7 to +1.3 bits/char. For the end goal of experts sharing freely, that's the wrong shape. Leaving out the last link changes the shape (Result 3). Both directions still work at once, with about half the gain and a small fraction of the dependence. Most of it still goes through the latest link available, so the translator's taste for "as late as possible" is still there. But at link 2, two middle layers are exchanging expert outputs, and neither model leans on the other much. For the end goal, that's the setting to build on. It isn't expert-to-expert in the narrow sense yet, though. A reads the whole of A''s link-2 layer, not the experts that know prose (Result 4).
 
 On the cross-tokenizer pair, nothing about the starting point closes A's prose gap. The gap is the crossing.
 
