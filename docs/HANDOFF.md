@@ -3,7 +3,7 @@
 For whoever picks this up next, human or agent. Read `CLAUDE.md` first (working agreement).
 `main` has the toy programme (PR #1 merged). The audit fixes, the seed sweep and its write-up
 and everything since (complementary models, the allow/force dials, the char pair, the outside review) are on local branch
-**`audit-fixes`** (committed, NEVER pushed; don't push unless the owner asks). 118 tests pass:
+**`audit-fixes`** (pushed to origin/audit-fixes 2026-11-03 at the owner's request; not merged into main). 119 tests pass:
 `CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python -m pytest -q` (the venv is `.venv`).
 
 ## Project goal (from the owner)
