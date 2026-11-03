@@ -1,12 +1,13 @@
 """Prefix-honest audit: indexing is exact, and the leak mechanism it guards against exists."""
 import random
 
+import pytest
 import torch
 
-from blammoe.toy.audit import full_text_a_nll, honest_a_nll, prefix_inputs
+from blammoe.toy.audit import causality_gate, full_text_a_nll, honest_a_nll, prefix_inputs
 from blammoe.toy.batching import make_batch
-from blammoe.toy.corpus import Sample, recall_sample
-from blammoe.toy.fused import FusedPair, closed_token_ends, token_ends
+from blammoe.toy.corpus import Sample, recall_sample, split_recall_sample
+from blammoe.toy.fused import BusAblation, FusedPair, closed_token_ends, run_pair, token_ends
 from blammoe.toy.moe import ToyMoEConfig, ToyMoELM
 from blammoe.toy.tokenizers import BPETokenizer, CharTokenizer
 
@@ -74,9 +75,9 @@ def test_closed_ends_mark_runs_final_only_after_they_end():
     assert CharTokenizer().closed_ends(text, CharTokenizer().encode(text)[1]) == [1, 2, 3, 4, 5, 6]
 
 
-def live_pair(ta, tb):
+def live_pair(ta, tb, signal="experts", safe_mask=False):
     pair = FusedPair(tiny(ta.vocab_size, 16, 0), tiny(tb.vocab_size, 12, 1), [0, 1], d_bus=8, n_heads=2,
-                     signal="experts", rel_pos=True)
+                     signal=signal, rel_pos=True, safe_mask=safe_mask)
     with torch.no_grad():
         for lk in pair.links.values():
             lk.rx_a.gate.fill_(1.0)
@@ -110,3 +111,88 @@ def test_plain_mask_leaks_with_live_links():
         full = full_text_a_nll(pair, a, b, token_ends(a), token_ends(b))[0, pos]
     honest = honest_a_nll(pair, s.text, pos, ta, tb)
     assert (full - honest).abs().max() > 1e-3
+
+
+def gate_docs():
+    """Split-recall views (each model reads a different text) plus code with long letter runs."""
+    splits = [split_recall_sample(random.Random(50 + i), 100) for i in range(2)]
+    return [(sp.view_a, sp.view_b) for sp in splits] + [(TEXT[:100], TEXT[:100])]
+
+
+def test_safe_pair_refuses_a_direct_call_without_writer_ends():
+    ta, tb = CharTokenizer(), bpe()
+    pair = live_pair(ta, tb, safe_mask=True)
+    s = Sample(text=TEXT[:40], blind=TEXT[:40])
+    a, b = make_batch([s], ta, 128), make_batch([s], tb, 128)
+    with pytest.raises(ValueError):
+        pair(a.ids, b.ids, token_ends(a), token_ends(b))
+    run_pair(pair, a, b)  # the supported path works
+
+
+@pytest.mark.parametrize("signal", ["experts", "moe", "resid"])
+def test_causality_gate_passes_safe_pairs_in_both_directions(signal):
+    ta, tb = CharTokenizer(), bpe()
+    pair = live_pair(ta, tb, signal, safe_mask=True)
+    kw = {"ablate": (BusAblation(hide=frozenset({0}), blank=frozenset({1}), tags="shift"),
+                     BusAblation(hide=frozenset({1}), blank=frozenset({0}), tags="zero"))} if signal == "experts" else {}
+    r = causality_gate(pair, gate_docs(), ta, tb, 128, **kw)
+    assert r["ok"], r
+    assert r["a"]["n_positions"] > 200 and r["b"]["n_positions"] > 50
+
+
+@pytest.mark.parametrize("signal", ["experts", "moe", "resid"])
+def test_causality_gate_passes_when_one_text_is_longer(signal):
+    """A reader that has read past the end of a shorter partner text: the full run never had
+    the partner's final token as an input (it's only a target), so the re-run mustn't either."""
+    ta, tb = CharTokenizer(), bpe()
+    pair = live_pair(ta, tb, signal, safe_mask=True)
+    r = causality_gate(pair, [(TEXT[:100], TEXT[:60]), (TEXT[:60], TEXT[:100])], ta, tb, 128)
+    assert r["ok"], r
+
+
+def test_causality_gate_catches_the_old_mask_leak_in_a_only():
+    """Positive control: the plain mask lets A (char) read BPE boundaries that depend on unseen
+    chars; B reading char-level A cannot leak. The gate must see exactly that."""
+    ta, tb = CharTokenizer(), bpe()
+    r = causality_gate(live_pair(ta, tb, "experts", safe_mask=False), gate_docs(), ta, tb, 128)
+    assert not r["ok"]
+    assert r["a"]["n_bad"] > 0 and r["b"]["n_bad"] == 0
+
+
+def test_causality_gate_fails_non_finite_outputs():
+    """NaN never compares greater than tol, so NaN outputs used to pass the gate with max_diff 0."""
+    ta, tb = CharTokenizer(), bpe()
+    pair = live_pair(ta, tb, "resid", safe_mask=True)
+    hook = pair.A.head.register_forward_hook(lambda m, i, o: torch.full_like(o, float("nan")))
+    try:
+        r = causality_gate(pair, gate_docs(), ta, tb, 128)
+    finally:
+        hook.remove()
+    assert not r["ok"] and r["a"]["n_bad"] == r["a"]["n_positions"] > 0 and r["a"]["max_diff"] == float("inf")
+
+
+def test_changing_unread_text_never_changes_safe_predictions():
+    """Independent of the prefix machinery: two texts that agree up to char c must give identical
+    predictions at every position (either model) that has read only text[:c]."""
+    ta, tb = CharTokenizer(), bpe()
+    rng = random.Random(0)
+    for signal in ("experts", "resid"):
+        pair = live_pair(ta, tb, signal, safe_mask=True)
+        for text in (TEXT[:100], split_recall_sample(random.Random(7), 100).view_a):
+            for c in rng.sample(range(5, 95), 6):
+                alt = text[:c] + "".join(rng.choice("abxyz 019;=,\n") for _ in range(len(text) - c))
+                outs = []
+                for t in (text, alt):
+                    a = make_batch([Sample(text=t, blind=t)], ta, 128)
+                    b = make_batch([Sample(text=t, blind=t)], tb, 128)
+                    with torch.no_grad():
+                        outs.append((run_pair(pair, a, b), a, b))
+                ((la1, lb1), _, b1), ((la2, lb2), _, b2) = outs
+                ja = list(range(min(c, la1.shape[1])))  # A position j has read text[:j+1]
+                assert torch.allclose(la1[0, ja], la2[0, ja], atol=1e-5)
+                jb = []
+                for t, (o1, o2) in enumerate(zip(b1.offsets[0], b2.offsets[0])):
+                    if o1 != o2 or int(b1.ids[0, t]) != int(b2.ids[0, t]) or o1[1] > c:
+                        break
+                    jb.append(t)
+                assert torch.allclose(lb1[0, jb], lb2[0, jb], atol=1e-5)

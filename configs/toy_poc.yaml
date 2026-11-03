@@ -4,6 +4,8 @@
 out_dir: results/toy_poc
 seq_chars: 256        # every sample is a 256-char window of text
 p_recall: 0.5         # share of synthetic key->value recall docs (rest: prose/code)
+val_share: 0.1        # papers/ and stdlib FILES held out for selection (audit M6) ...
+test_share: 0.1       # ... and for reported ordinary-text numbers; BPE and training see the rest
 steps: 4000
 batch_size: 32
 lr: 0.003
@@ -69,3 +71,7 @@ stage2:               # WP-T3: reinforce partner-dependent wins (both arms: same
   batch_size: 16
   lr: 0.0002          # with 100-step warmup + cosine decay
   lam: 2.0            # reward arm: partner-dependent win tokens count 1 + lam = 3x in the CE mean
+hide:                 # audit M3 attribution controls (scripts/toy_fused_hide.py)
+  finetune_steps: 300 # recovery fine-tune: links retrained with the chosen experts hidden (0 = skip)
+  finetune_warmup: 50
+  lr: 0.002           # warmup, then cosine decay; batch size from fused

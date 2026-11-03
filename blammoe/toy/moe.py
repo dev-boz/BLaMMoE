@@ -113,7 +113,7 @@ class ToyMoELM(nn.Module):
 
     def forward(self, ids: torch.Tensor) -> torch.Tensor:
         T = ids.shape[1]
-        causal = torch.triu(torch.full((T, T), float("-inf"), device=ids.device), diagonal=1)
+        causal = torch.ones(T, T, dtype=torch.bool, device=ids.device).triu(1)  # bool: right in any dtype
         x = self.tok(ids) + self.pos(torch.arange(T, device=ids.device))
         for blk in self.layers:
             x = blk(x, causal)

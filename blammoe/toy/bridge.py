@@ -26,7 +26,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from blammoe.adapters import RxAdapter, TxAdapter
-from blammoe.toy.batching import Batch, answer_mask, make_batch
+from blammoe.toy.batching import Batch, answer_mask, answer_runs, make_batch
 from blammoe.toy.corpus import Sample
 from blammoe.toy.moe import ToyMoELM
 
@@ -109,13 +109,22 @@ def routing_at_answers(model: ToyMoELM, batch: Batch, layer: int) -> np.ndarray:
 # --------------------------------------------------------------------------- B-side scoring
 @torch.no_grad()
 def score_answers(logits: torch.Tensor, batch: Batch) -> dict[str, float]:
+    """Teacher-forced answer scores: per digit (``acc``, ``nll`` over ``n``) and per whole
+    answer (``exact``: all its scored digits right, over ``n_answers``)."""
     m = answer_mask(batch)
-    lp = logits.log_softmax(-1)[m]
+    lp = logits.log_softmax(-1)
+    ok = lp.argmax(-1) == batch.targets
+    exact = []
+    for i, (full, pos) in enumerate(zip(batch.full_offsets, batch.answer_pos)):
+        at = {full[p + 1][0]: p for p in pos}  # answer char -> position predicting it
+        exact += [bool(ok[i, [at[c] for c in run]].all()) for run in answer_runs(at)]
     tgt = batch.targets[m]
     return {
-        "acc": float((lp.argmax(-1) == tgt).float().mean()),
-        "nll": float(-lp.gather(1, tgt[:, None]).mean()),
+        "acc": float(ok[m].float().mean()),
+        "nll": float(-lp[m].gather(1, tgt[:, None]).mean()),
         "n": int(m.sum()),
+        "exact": sum(exact) / len(exact) if exact else float("nan"),
+        "n_answers": len(exact),
     }
 
 
@@ -151,9 +160,27 @@ def paired_expert_states(
     return h_a[keep].numpy(), h_b[keep].numpy()
 
 
+def native_transplant_hook(model_b: ToyMoELM, layer_b: int, expert_b: int, translated: torch.Tensor,
+                           alpha: float = 1.0):
+    """Swap B expert ``expert_b`` for ``translated`` the way B's MoE uses it: only where B's router
+    picked that expert, at its router weight w. moe_out += alpha * w * routed * (translated - e_j(x)).
+    alpha=1 is an exact replacement; tokens not routed to e_j are untouched. This is the
+    expert-level test (spec 1.1, CLAUDE.md rule 8)."""
+    expert = model_b.layers[layer_b].moe.experts[expert_b]
+
+    def fn(module, inputs, output):
+        x = inputs[0]
+        w, idx = module.router(x).softmax(-1).topk(module.top_k, dim=-1)
+        gate = (w * (idx == expert_b)).sum(-1, keepdim=True)  # router weight if routed, else 0
+        return output + alpha * gate * (translated - expert(x))
+
+    return _Inject(model_b.layers[layer_b].moe, fn)
+
+
 def transplant_hook(model_b: ToyMoELM, layer_b: int, expert_b: int, translated: torch.Tensor, alpha: float):
-    """Swap B expert ``expert_b``'s dense output for ``translated`` inside B's MoE at
-    ``layer_b``: moe_out += alpha * (translated - e_j(x))."""
+    """CONTROL, not an expert swap: moe_out += alpha * (translated - e_j(x)) at EVERY token,
+    ignoring B's routing and router weight (unrouted tokens get -e_j(x) injected). Kept so the
+    original "dense additive" numbers stay comparable; use ``native_transplant_hook`` for claims."""
     expert = model_b.layers[layer_b].moe.experts[expert_b]
 
     def fn(module, inputs, output):

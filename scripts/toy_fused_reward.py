@@ -47,8 +47,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
         logf.write(line + "\n")
         logf.flush()
 
-    base = setup.sampler(cfg, seed=0)
-    train = MixedSampler(base.prose, base.code, L, p_recall=0.0, seed=5151)  # same stream for both arms
+    train = MixedSampler(*setup.texts(cfg, "train"), L, p_recall=0.0, seed=5151)  # same stream for both arms
     opt = torch.optim.AdamW(pair.bridge_parameters(), lr=st.lr, weight_decay=0.0)
     log(f"{variant}: stage2={v['stage2']} lam={lam} from {v['init_from']}")
     hist = []
@@ -78,7 +77,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
 
     # ---------------- evaluation on held-out text (same sets as stage 1)
     pair.eval()
-    gs = MixedSampler(base.prose, base.code, L, p_recall=0.0, seed=777)
+    gs = MixedSampler(*setup.texts(cfg, "test"), L, p_recall=0.0, seed=777)
     gen = [gs.sample() for _ in range(48)]
     g1, g2 = make_batch(gen, tok_a, L), make_batch(gen, tok_b, L)
     ge1, ge2 = token_ends(g1), token_ends(g2)
@@ -105,7 +104,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
     }
     for k, r in res["general"].items():
         log(f"general {k}: " + " ".join(f"{n}={x:.4f}" for n, x in r.items()))
-    log("split fused: " + " ".join(f"{n}={x['acc']:.3f}" for n, x in res["split_fused"].items()))
+    log("split fused: " + " ".join(f"{n}={x['acc']:.3f} (exact {x['exact']:.3f})" for n, x in res["split_fused"].items()))
     (out / f"fused_{variant}.json").write_text(json.dumps(res, indent=1, default=str))
     torch.save(pair.links.state_dict(), out / f"fused_{variant}.pt")
     log("done")

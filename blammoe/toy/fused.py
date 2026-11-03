@@ -23,14 +23,16 @@ anything (and no softmax row is ever empty).
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from blammoe.adapters import RxAdapter, TxAdapter
-from blammoe.toy.batching import Batch, answer_positions
+from blammoe.toy.batching import Batch, answer_positions, answer_runs
 from blammoe.toy.moe import ToyMoELM
+from blammoe.toy.reward import win_weighted_loss
 
 NEVER = 10**9  # end-char for padding: unreadable as a writer
 
@@ -75,7 +77,8 @@ def char_distance_buckets(reader_ends: torch.Tensor, writer_ends: torch.Tensor) 
 
 
 def _causal(T: int, device) -> torch.Tensor:
-    return torch.triu(torch.full((T, T), float("-inf"), device=device), diagonal=1)
+    """True = blocked. Boolean, so it stays causal in fp64/bf16 (a float32 -inf mask does not)."""
+    return torch.ones(T, T, dtype=torch.bool, device=device).triu(1)
 
 
 class Link(nn.Module):
@@ -97,20 +100,65 @@ class Link(nn.Module):
         self.eid_b = nn.Embedding(n_exp_b, d_bus) if n_exp_b else None
 
     @staticmethod
-    def _bus(tx: TxAdapter, h: torch.Tensor, eid: nn.Embedding | None, idx: torch.Tensor | None):
+    def _bus(tx: TxAdapter, h: torch.Tensor, eid: nn.Embedding | None, idx: torch.Tensor | None,
+             tags: str = "keep"):
         z = tx(h)  # [B, T, d_bus] or, for expert tokens, [B, T, k, d_bus]
         if idx is not None:
-            z = (z + eid(idx)).flatten(1, 2)  # position-major: (t0,slot0), (t0,slot1), ...
+            if tags == "shift":  # every entry tagged as the wrong expert
+                idx = (idx + 1) % eid.num_embeddings
+            if tags != "zero":
+                z = z + eid(idx)
+            z = z.flatten(1, 2)  # position-major: (t0,slot0), (t0,slot1), ...
         return torch.cat([torch.zeros_like(z[:, :1]), z], dim=1)  # prepend null slot
 
     def forward(self, xa, xb, sa, sb, mask_a, mask_b, ia=None, ib=None, want_weights=False,
-                rel_a=None, rel_b=None):
-        ra = self.rx_a(xa, self._bus(self.tx_b, sb, self.eid_b, ib), mask_a, want_weights, rel_a)
-        rb = self.rx_b(xb, self._bus(self.tx_a, sa, self.eid_a, ia), mask_b, want_weights, rel_b)
+                rel_a=None, rel_b=None, tags_a="keep", tags_b="keep"):
+        ra = self.rx_a(xa, self._bus(self.tx_b, sb, self.eid_b, ib, tags_b), mask_a, want_weights, rel_a)
+        rb = self.rx_b(xb, self._bus(self.tx_a, sa, self.eid_a, ia, tags_a), mask_b, want_weights, rel_b)
         return ra, rb
 
 
 SIGNALS = ("moe", "resid", "experts")
+TAGS = ("keep", "zero", "shift")
+
+
+@dataclass(frozen=True)
+class BusAblation:
+    """Attribution controls on one model's expert bus, as its partner reads it (signal
+    "experts" only; audit M3). Applied at every link.
+
+    ``hide``: these experts' entries are masked out, so the reader cannot attend to them.
+    ``blank``: these experts' entries keep their slot, mask and expert-ID tag, but the expert's
+    output is replaced by a constant: ``blank_value[layer][e]`` (e.g. its mean output on a
+    selection set, see ``expert_output_means``), zeros if not given. Content-only ablation.
+    ``tags``: "zero" drops every entry's expert-ID tag, "shift" tags expert e as e+1 (mod E);
+    the outputs are untouched. ID-only ablation.
+    """
+    hide: frozenset[int] = frozenset()
+    blank: frozenset[int] = frozenset()
+    tags: str = "keep"
+    blank_value: dict[int, torch.Tensor] | None = field(default=None, compare=False)
+
+    def __post_init__(self):
+        if self.tags not in TAGS:
+            raise ValueError(self.tags)
+
+    def apply(self, layer: int, slots: torch.Tensor, idx: torch.Tensor, mask: torch.Tensor):
+        """slots [B, T, k, d], idx [B, T, k], reader mask [B, T_r, 1 + T*k] -> (slots, mask)."""
+        if self.blank:
+            on = torch.isin(idx, torch.tensor(sorted(self.blank), device=idx.device))[..., None]
+            if self.blank_value is None:
+                const = torch.zeros_like(slots)
+            else:
+                const = self.blank_value[layer].to(slots)[idx]
+            slots = torch.where(on, const, slots)
+        if self.hide:
+            gone = torch.isin(idx.flatten(1), torch.tensor(sorted(self.hide), device=idx.device))
+            mask = mask | torch.cat([torch.zeros_like(gone[:, :1]), gone], 1)[:, None, :]
+        return slots, mask
+
+
+NO_ABLATION = BusAblation()
 
 
 class FusedPair(nn.Module):
@@ -138,21 +186,34 @@ class FusedPair(nn.Module):
     def bridge_parameters(self):
         return self.links.parameters()
 
+    def start_gates(self, a: float = 0.0, b: float = 0.0) -> None:
+        """Start every link's readers part-open: tanh(gate) = ``a`` for model A's readers
+        (rx_a), ``b`` for B's. Default 0 = shut, as built. Draws no randomness, so the rest
+        of the init is unchanged."""
+        with torch.no_grad():
+            for lk in self.links.values():
+                lk.rx_a.gate.fill_(math.atanh(a))
+                lk.rx_b.gate.fill_(math.atanh(b))
+
     def forward(
         self, ids_a: torch.Tensor, ids_b: torch.Tensor, ends_a: torch.Tensor, ends_b: torch.Tensor,
         *, disabled: frozenset[int] = frozenset(), partner_roll: int = 0, attn: dict | None = None,
         write_ends_a: torch.Tensor | None = None, write_ends_b: torch.Tensor | None = None,
-        hide_experts: tuple[frozenset[int], frozenset[int]] = (frozenset(), frozenset()),
+        ablate: tuple[BusAblation, BusAblation] = (NO_ABLATION, NO_ABLATION),
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """``disabled``: link depths switched off. ``partner_roll``: each model hears the
         partner of a *different* document in the batch (shuffled-partner control).
         ``attn``: if a dict is given, filled with {layer: (A-reads-B, B-reads-A)} attention
-        [B, T_reader, 1 + S] (column 0 = null slot) plus the expert ids on the bus.
+        [B, T_reader, 1 + S] (column 0 = null slot), the read masks used (``*_blocked``, True =
+        blocked, after any ``ablate``), plus the expert ids and outputs on the bus (true ids and
+        unablated outputs, before any ``ablate``).
         ``write_ends_*``: when each position may be READ by the partner (default: its own
         ends). Pass ``closed_token_ends`` to stop a partner reading a BPE token before its
         boundaries are final - otherwise those boundaries leak upcoming chars.
-        ``hide_experts``: (A's, B's) expert ids whose bus entries the partner may not read
-        (expert-token signal only) - the ablation for "does the chosen expert carry it?"."""
+        ``ablate``: (A's, B's) ``BusAblation`` - what the partner may read of each model's
+        expert bus (expert-token signal only): the controls for "does the chosen expert carry it?"."""
+        if self.safe_mask and (write_ends_a is None or write_ends_b is None):
+            raise ValueError("safe_mask pair needs closed-chunk writer ends: call run_pair, or pass write_ends_*")
         A, B = self.A, self.B
         xa = A.tok(ids_a) + A.pos(torch.arange(ids_a.shape[1], device=ids_a.device))
         xb = B.tok(ids_b) + B.pos(torch.arange(ids_b.shape[1], device=ids_b.device))
@@ -160,6 +221,8 @@ class FusedPair(nn.Module):
         wa = (ends_a if write_ends_a is None else write_ends_a).roll(partner_roll, 0)  # partner as writer
         wb = (ends_b if write_ends_b is None else write_ends_b).roll(partner_roll, 0)
         experts = self.signal == "experts"
+        if not experts and ablate != (NO_ABLATION, NO_ABLATION):
+            raise ValueError("bus ablations need signal='experts'")
         if experts:
             wa, wb = wa.repeat_interleave(A.cfg.top_k, 1), wb.repeat_interleave(B.cfg.top_k, 1)
         mask_a, mask_b = read_mask(ends_a, wb), read_mask(ends_b, wa)
@@ -183,26 +246,27 @@ class FusedPair(nn.Module):
             ia = ib = None
             la_mask, lb_mask = mask_a, mask_b
             if experts:
-                sa, sb = blk_a.moe.last_slots, blk_b.moe.last_slots
+                sa, sb = blk_a.moe.last_slots.roll(partner_roll, 0), blk_b.moe.last_slots.roll(partner_roll, 0)
                 ia, ib = blk_a.moe.last_idx.roll(partner_roll, 0), blk_b.moe.last_idx.roll(partner_roll, 0)
-                hid_a, hid_b = hide_experts
-                if hid_b:  # A may not read these B experts
-                    gone = torch.isin(ib.flatten(1), torch.tensor(sorted(hid_b), device=ib.device))
-                    la_mask = mask_a | torch.cat([torch.zeros_like(gone[:, :1]), gone], 1)[:, None, :]
-                if hid_a:
-                    gone = torch.isin(ia.flatten(1), torch.tensor(sorted(hid_a), device=ia.device))
-                    lb_mask = mask_b | torch.cat([torch.zeros_like(gone[:, :1]), gone], 1)[:, None, :]
+                raw = (sa, sb)
+                abl_a, abl_b = ablate
+                sa, lb_mask = abl_a.apply(l, sa, ia, mask_b)  # what B may read of A
+                sb, la_mask = abl_b.apply(l, sb, ib, mask_a)  # what A may read of B
             elif self.signal == "moe":
-                sa, sb = cap["a"], cap["b"]
+                sa, sb = cap["a"].roll(partner_roll, 0), cap["b"].roll(partner_roll, 0)
             else:
-                sa, sb = xa, xb
+                sa, sb = xa.roll(partner_roll, 0), xb.roll(partner_roll, 0)
             ra, rb = self.links[str(l)](
-                xa, xb, sa.roll(partner_roll, 0), sb.roll(partner_roll, 0), la_mask, lb_mask, ia, ib,
+                xa, xb, sa, sb, la_mask, lb_mask, ia, ib,
                 want_weights=attn is not None, rel_a=rel_a, rel_b=rel_b,
+                tags_a=ablate[0].tags, tags_b=ablate[1].tags,
             )
             if attn is not None:
                 (xa, w_ab), (xb, w_ba) = ra, rb
-                attn[l] = {"a_reads_b": w_ab, "b_reads_a": w_ba, "b_expert_ids": ib, "a_expert_ids": ia}
+                attn[l] = {"a_reads_b": w_ab, "b_reads_a": w_ba, "b_expert_ids": ib, "a_expert_ids": ia,
+                           "a_reads_b_blocked": la_mask, "b_reads_a_blocked": lb_mask}
+                if experts:
+                    attn[l]["a_expert_out"], attn[l]["b_expert_out"] = raw
             else:
                 xa, xb = ra, rb
         return A.head(A.ln_f(xa)), B.head(B.ln_f(xb))
@@ -218,30 +282,64 @@ def run_pair(pair: "FusedPair", batch_a: Batch, batch_b: Batch, **kw):
 
 
 # --------------------------------------------------------------------------- loss / eval
-def pair_loss(logits: torch.Tensor, batch: Batch, answer_weight: float = 0.0) -> torch.Tensor:
-    loss = F.cross_entropy(logits.flatten(0, 1), batch.targets.flatten(), ignore_index=-100)
-    if answer_weight:
-        m = torch.zeros_like(batch.targets, dtype=torch.bool)
-        for i, pos in enumerate(batch.answer_pos):
-            m[i, pos] = True
-        if m.any():
-            loss = loss + answer_weight * F.cross_entropy(logits[m], batch.targets[m])
+def answer_mask(batch: Batch) -> torch.Tensor:
+    """[B, T] bool: the recall-answer target positions."""
+    m = torch.zeros_like(batch.targets, dtype=torch.bool)
+    for i, pos in enumerate(batch.answer_pos):
+        m[i, pos] = True
+    return m
+
+
+def pair_loss(
+    logits: torch.Tensor, batch: Batch, answer_weight: float = 0.0, wins: torch.Tensor | None = None, lam: float = 0.0,
+    answer_in_mean: bool = False,
+) -> torch.Tensor:
+    """Mean next-token CE, plus ``answer_weight`` x the CE on recall answers. ``lam`` > 0: the
+    ``wins`` tokens (partner-dependent, blammoe/toy/reward.py) count 1 + lam in the mean.
+
+    The answer term is a mean over the batch's answer tokens alone, so when answers are rare each
+    one weighs ~n_tokens / n_answers (~146x an ordinary token at p_split 0.05, 21x at 0.5;
+    docs/toy-dial-results.md). ``answer_in_mean``: answer tokens count 1 + answer_weight inside
+    the one token mean instead, so the push scales with how many answers there are."""
+    m = answer_mask(batch) if answer_weight else None
+    if answer_in_mean:
+        ce = F.cross_entropy(logits.flatten(0, 1), batch.targets.flatten(), ignore_index=-100, reduction="none")
+        w = torch.ones_like(ce)
+        if m is not None:
+            w = w + answer_weight * m.flatten().float()
+        if lam:
+            w = w + lam * wins.flatten().float()
+        valid = (batch.targets != -100).flatten()
+        return (ce * w)[valid].sum() / valid.sum()
+    if lam:
+        loss = win_weighted_loss(logits, batch.targets, wins, lam)
+    else:
+        loss = F.cross_entropy(logits.flatten(0, 1), batch.targets.flatten(), ignore_index=-100)
+    if m is not None and m.any():
+        loss = loss + answer_weight * F.cross_entropy(logits[m], batch.targets[m])
     return loss
 
 
 @torch.no_grad()
 def subset_accuracy(logits: torch.Tensor, batch: Batch, chars_per_sample: list[tuple[int, ...]]) -> dict:
-    """Top-1 accuracy on the answer tokens whose char is in each sample's given set."""
-    rows, cols = [], []
+    """Teacher-forced top-1 accuracy on the answer tokens whose char is in each sample's given set:
+    per digit (``acc`` over ``n`` digits) and per whole answer (``exact``: all its digits right,
+    over ``n_answers``). An answer only counts for ``exact`` if every one of its digits is scored."""
+    rows, cols, groups = [], [], []
     for i, (full, chars) in enumerate(zip(batch.full_offsets, chars_per_sample)):
-        for p in answer_positions(full, chars):
-            rows.append(i)
-            cols.append(p)
+        for run in answer_runs(chars):
+            pos = answer_positions(full, run)
+            if len(pos) == len(run):
+                groups.append(range(len(rows), len(rows) + len(pos)))
+            rows += [i] * len(pos)
+            cols += pos
     if not rows:
-        return {"acc": float("nan"), "n": 0}
+        return {"acc": float("nan"), "n": 0, "exact": float("nan"), "n_answers": 0}
     r, c = torch.tensor(rows), torch.tensor(cols)
-    pred = logits[r, c].argmax(-1)
-    return {"acc": float((pred == batch.targets[r, c]).float().mean()), "n": len(rows)}
+    ok = (logits[r, c].argmax(-1) == batch.targets[r, c]).tolist()
+    exact = [all(ok[j] for j in g) for g in groups]
+    return {"acc": sum(ok) / len(ok), "n": len(rows),
+            "exact": sum(exact) / len(exact) if exact else float("nan"), "n_answers": len(exact)}
 
 
 @torch.no_grad()
@@ -254,6 +352,13 @@ def bits_per_char(logits: torch.Tensor, batch: Batch) -> float:
     nll = F.cross_entropy(logits.flatten(0, 1), batch.targets.flatten(), ignore_index=-100, reduction="sum")
     chars = sum(full[-1][1] - full[0][1] for full in batch.full_offsets)
     return float(nll) / chars / math.log(2)
+
+
+def bits_per_doc(logits: torch.Tensor, batch: Batch) -> list[list[float]]:
+    """``bits_per_char`` per document as [bits, chars] rows: pooled over documents (sum of bits
+    / sum of chars, as ``blammoe.stats`` pools) they give ``bits_per_char`` back."""
+    nll = F.cross_entropy(logits.transpose(1, 2), batch.targets, ignore_index=-100, reduction="none").sum(1)
+    return [[float(b) / math.log(2), full[-1][1] - full[0][1]] for b, full in zip(nll, batch.full_offsets)]
 
 
 # --------------------------------------------------------------------------- diversity of thinking
@@ -326,21 +431,47 @@ def diversity(solo: dict, fused: dict, partner_solo: dict, texts: list[str], cha
 
 @torch.no_grad()
 def expert_attention_mass(weights: torch.Tensor, expert_ids: torch.Tensor, n_experts: int,
-                          reader_mask: torch.Tensor) -> dict:
+                          reader_mask: torch.Tensor, blocked: torch.Tensor) -> dict:
     """Which partner experts did the reader choose to read?
 
     weights: [B, T_r, 1 + T_w*k] attention (col 0 = null slot); expert_ids: [B, T_w, k];
-    reader_mask: [B, T_r] bool, the reader positions to aggregate over.
-    Returns the null-slot share, each expert's share of attention mass, each expert's
-    share of the bus entries (presence), and their ratio (>1 = sought out).
+    reader_mask: [B, T_r] bool, the reader positions to aggregate over; blocked: [B, T_r, 1 + T_w*k]
+    the read mask the weights were computed under (True = blocked; ``attn[l]["*_blocked"]``).
+    Returns the null-slot share, each expert's share of attention mass, its baseline share
+    and their ratio (>1 = sought out). The baseline is the share each expert would get if every
+    reader spread its bus mass uniformly over the entries it may legally read (not future, not
+    padding, not hidden), so uniform attention gives a ratio of exactly 1.
     """
     w = weights[reader_mask]  # [N, 1 + S]
+    legal = (~blocked[reader_mask][:, 1:]).float()  # [N, S]
     ids = expert_ids.flatten(1)  # [B, S]
     ids_r = ids[:, None, :].expand(-1, reader_mask.shape[1], -1)[reader_mask]  # [N, S]
     onehot = torch.nn.functional.one_hot(ids_r, n_experts).float()  # [N, S, E]
     mass = torch.einsum("ns,nse->e", w[:, 1:], onehot)
     total = w.sum()
-    presence = torch.nn.functional.one_hot(ids, n_experts).float().mean((0, 1))
     share = mass / mass.sum().clamp_min(1e-12)
+    uniform = legal / legal.sum(1, keepdim=True).clamp_min(1)  # [N, S]
+    base = torch.einsum("n,ns,nse->e", w[:, 1:].sum(1), uniform, onehot)
+    base = base / base.sum().clamp_min(1e-12)
     return {"null_share": float(w[:, 0].sum() / total), "share": share.tolist(),
-            "presence": presence.tolist(), "ratio": (share / presence.clamp_min(1e-12)).tolist()}
+            "baseline": base.tolist(), "ratio": (share / base.clamp_min(1e-12)).tolist()}
+
+
+@torch.no_grad()
+def expert_output_means(pair: FusedPair, batch_a: Batch, batch_b: Batch) -> tuple[dict, dict]:
+    """(A's, B's) {link: [E, d_model]}: each expert's mean routed output over the real (non-pad)
+    positions of a batch, run fused with nothing ablated. Experts never routed there get zeros.
+    Use as ``BusAblation.blank_value``; compute it on a selection set, not the reported one,
+    so the constant carries nothing about the documents being scored."""
+    attn: dict = {}
+    run_pair(pair, batch_a, batch_b, attn=attn)
+    means: tuple[dict, dict] = ({}, {})
+    for side, (batch, n) in enumerate(((batch_a, pair.A.cfg.n_experts), (batch_b, pair.B.cfg.n_experts))):
+        real = token_ends(batch) != NEVER
+        s = "ab"[side]
+        for l, a in attn.items():
+            out, ids = a[f"{s}_expert_out"][real], a[f"{s}_expert_ids"][real]  # [N, k, d], [N, k]
+            onehot = F.one_hot(ids, n).to(out)  # [N, k, E]
+            total = torch.einsum("nkd,nke->ed", out, onehot)
+            means[side][l] = total / onehot.sum((0, 1)).clamp_min(1)[:, None]
+    return means

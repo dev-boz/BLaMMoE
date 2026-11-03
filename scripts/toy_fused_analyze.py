@@ -38,8 +38,7 @@ def main(cfg_path: str, variant: str, threads: int = 2) -> None:
     pair.links.load_state_dict(torch.load(out / f"fused_{variant}.pt"))
     pair.eval()
 
-    base = setup.sampler(cfg, seed=0)
-    gs = MixedSampler(base.prose, base.code, L, p_recall=0.0, seed=777)
+    gs = MixedSampler(*setup.texts(cfg, "test"), L, p_recall=0.0, seed=777)
     gen = [gs.sample() for _ in range(48)]
     texts = [g.text for g in gen]
     b1, b2 = make_batch(gen, t1, L), make_batch(gen, t2, L)

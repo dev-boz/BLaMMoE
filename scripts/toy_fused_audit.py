@@ -1,106 +1,84 @@
-"""Cross-tokenizer causality audit of trained fused pairs (prefix-honest A scoring).
+"""Cross-tokenizer causality gate for trained fused pairs: exits 1 if any prediction leaks.
 
-For each variant: A's bits/char on ordinary text and A's accuracy on split-recall
-answers that need B, scored three ways on the SAME positions:
-  solo         - A alone (links off)
-  fused_full   - fused, partner tokenized on the whole text (how results were reported)
-  fused_honest - fused, partner re-run on the prefix only (no future-dependent boundaries)
-fused_full - fused_honest = what A got from B's token boundaries peeking ahead.
+For each variant, both models' full-text log-probs are compared with prefix-honest
+re-runs (each position sees only the chars it has read; blammoe.toy.audit.causality_gate)
+at EVERY scored position of the evaluation windows the results are reported on: the 96
+split-recall windows (each model its own view), the 48 ordinary-text windows and the 48 + 48
+prose-only / code-only windows (``domain_eval_sets``). Expert
+variants are also checked under the bus ablations the attribution controls use (one expert
+hidden, one blanked, every tag shifted: scripts/toy_fused_hide.py). Any position
+differing by more than ``tol`` fails the variant; the exit code is nonzero if any fails.
 
-    PYTHONPATH=. python scripts/toy_fused_audit.py configs/toy_poc.yaml [threads] [n_docs] [variant ...]
+The check runs in float64. Causality is an exact property of the masks, but in float32 the
+prefix re-runs have different shapes than the full run, so GPU rounding differs by ~1e-7 and can
+flip a near-tied top-k routing choice; with expert-tagged buses that shows up as a ~1e-3
+"leak" in BOTH directions on ~0.3% of positions. In float64 the safe pair matches to ~1e-15.
+Upcasting trained float32 weights is exact, so this audits the same function.
+
+    PYTHONPATH=. python scripts/toy_fused_audit.py configs/toy_poc.yaml [threads] [variant ...]
+
+Writes <out_dir>/fused_audit.json. A variant trained without ``safe_mask`` is expected to
+fail (that is the leak this guards against); its max_diff measures the leak.
 """
 import json
-import random
 import sys
 from pathlib import Path
 
 import torch
 
+from blammoe.device import pick_device
 from blammoe.toy import setup
-from blammoe.toy.audit import full_text_a_nll, honest_a_nll, prefix_inputs, to_bits
-from blammoe.toy.batching import make_batch
+from blammoe.toy.audit import causality_gate
 from blammoe.toy.config import ToyPOCConfig
-from blammoe.toy.corpus import MixedSampler, Sample, split_recall_sample
-from blammoe.toy.fused import FusedPair, closed_token_ends, run_pair, token_ends
+from blammoe.toy.fused import BusAblation, FusedPair
+from blammoe.toy.fused_train import domain_eval_sets, general_eval_set, split_eval_set
 from blammoe.toy.moe import load
 
-DEFAULT = ["ab_experts_all_rel", "ab_experts_all_rel_plain", "ab_all_rel"]
+DEFAULT = ["ab_experts_all_rel_safe", "ab_resid_all_rel_safe"]
+TOL = 1e-6  # float64: a safe pair agrees to ~1e-15, the old leak differs by ~0.1-1
 
 
-def main(cfg_path: str, threads: int = 4, n_docs: int = 16, *variants: str) -> None:
+def main(cfg_path: str, threads: int = 4, *variants: str) -> int:
     torch.set_num_threads(threads)
+    device = pick_device()
     cfg = ToyPOCConfig.from_yaml(cfg_path)
     fs, out, L = cfg.fused, Path(cfg.out_dir), cfg.seq_chars
     tok_a, tok_b = setup.tokenizer(cfg.model_a, cfg), setup.tokenizer(cfg.model_b, cfg)
-    A, _ = load(out / "model_a.pt")
-    B, _ = load(out / "model_b.pt")
-    base = setup.sampler(cfg, seed=0)
-    gs = MixedSampler(base.prose, base.code, L, p_recall=0.0, seed=777)
-    docs = [gs.sample().text for _ in range(48)][:n_docs]
-    rng = random.Random(2025)
-    splits = [split_recall_sample(rng, L) for _ in range(96)][:48]
-    report = {}
+    A, _ = load(out / "model_a.pt", device)
+    B, _ = load(out / "model_b.pt", device)
+    docs = {"split": [(s.view_a, s.view_b) for s in split_eval_set(L)],
+            "general": [(d.text, d.text) for d in general_eval_set(*setup.texts(cfg, "test"), L)]}
+    for dom, dd in domain_eval_sets(*setup.texts(cfg, "test"), L).items():
+        docs[dom] = [(d.text, d.text) for d in dd]
+    report, failed = {}, []
     for name in variants or DEFAULT:
         v = fs.variants[name]
-        pair = FusedPair(A, B, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"), v.get("rel_pos", False), v.get("safe_mask", False))
-        pair.links.load_state_dict(torch.load(out / f"fused_{name}.pt"))
-        pair.eval()
-        off = frozenset(int(k) for k in pair.links)
-        nll = {"solo": [], "fused_full": [], "fused_honest": []}
-        is_letter = []
-        for text in docs:
-            doc = Sample(text=text, blind=text, kind="general")
-            a, b = make_batch([doc], tok_a, L), make_batch([doc], tok_b, L)
-            ea, eb = token_ends(a), token_ends(b)
-            pos = [i for i in range(a.ids.shape[1]) if a.targets[0, i] != -100]
-            with torch.no_grad():
-                wk = ({"write_ends_a": closed_token_ends(a), "write_ends_b": closed_token_ends(b)}
-                      if pair.safe_mask else {})
-                nll["solo"].append(full_text_a_nll(pair, a, b, ea, eb, disabled=off, **wk)[0, pos])
-                nll["fused_full"].append(full_text_a_nll(pair, a, b, ea, eb, **wk)[0, pos])
-            nll["fused_honest"].append(honest_a_nll(pair, text, pos, tok_a, tok_b, safe=pair.safe_mask))
-            is_letter += [text[i + 1].isalpha() for i in pos]
-        letter = torch.tensor(is_letter)
-        cat = {k: torch.cat(x) for k, x in nll.items()}
-        general = {k: {"all": to_bits(x), "next_is_letter": to_bits(x[letter]),
-                       "next_not_letter": to_bits(x[~letter])} for k, x in cat.items()}
-        general["n_positions"] = int(letter.numel())
-
-        # split recall: A's answers that only B can supply
-        rec = {"fused_full": [], "fused_honest": [], "solo": []}
-        for s in splits:
-            sa, sb = s.view("a"), s.view("b")
-            a, b = make_batch([sa], tok_a, L), make_batch([sb], tok_b, L)
-            ea, eb = token_ends(a), token_ends(b)
-            pos = [c - 1 for c in s.partner_answers("a") if 0 <= c - 1 < a.ids.shape[1]]
-            if not pos:
-                continue
-            tgt = a.targets[0, pos]
-            with torch.no_grad():
-                la, _ = run_pair(pair, a, b)
-                ls, _ = run_pair(pair, a, b, disabled=off)
-            rec["fused_full"].append(la[0, pos].argmax(-1) == tgt)
-            rec["solo"].append(ls[0, pos].argmax(-1) == tgt)
-            # honest: B gets ITS OWN view, re-tokenized on the prefix; A its own view
-            hon = []  # one prefix per answer position
-            for p in pos:
-                ia, ea2, _, _, t, last, cla, _ = prefix_inputs(sa.text, [p], tok_a, tok_b)
-                _, _, ib, eb2, _, _, _, clb = prefix_inputs(sb.text, [p], tok_a, tok_b)
-                wk = {"write_ends_a": cla, "write_ends_b": clb} if pair.safe_mask else {}
-                with torch.no_grad():
-                    lh, _ = pair(ia, ib, ea2, eb2, **wk)
-                hon.append(lh[0, last[0]].argmax(-1) == t[0])
-            rec["fused_honest"].append(torch.stack(hon))
-        recall = {k: float(torch.cat(x).float().mean()) for k, x in rec.items()}
-        recall["n_answers"] = int(torch.cat(rec["solo"]).numel())
-        report[name] = {"general_bits_per_char": general, "split_recall_A_needs_B_acc": recall}
-        print(f"== {name}", flush=True)
-        print("  general bpc  " + " | ".join(f"{k}: {v['all']:.4f} (letter {v['next_is_letter']:.3f}, "
-              f"non-letter {v['next_not_letter']:.3f})" for k, v in general.items() if isinstance(v, dict)), flush=True)
-        print("  recall acc   " + " | ".join(f"{k}: {v:.3f}" for k, v in recall.items()), flush=True)
+        if v["pair"] != "ab":
+            raise ValueError(f"{name}: the gate is for cross-tokenizer pairs (pair: ab)")
+        pair = FusedPair(A, B, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"), v.get("rel_pos", False),
+                         v.get("safe_mask", False)).to(device)
+        pair.links.load_state_dict(torch.load(out / f"fused_{name}.pt", map_location=device))
+        pair = pair.double().eval()  # see module docstring
+        paths = {"normal": {}}
+        if pair.signal == "experts":
+            abl = BusAblation(hide=frozenset({0}), blank=frozenset({1}), tags="shift")
+            paths["ablated"] = {"ablate": (abl, abl)}
+        report[name] = {}
+        for path, kw in paths.items():
+            for kind, dd in docs.items():
+                r = causality_gate(pair, dd, tok_a, tok_b, L, tol=TOL, **kw)
+                report[name][f"{path}/{kind}"] = r
+                print(f"== {name} {path}/{kind}: {'PASS' if r['ok'] else 'FAIL'} | "
+                      + " | ".join(f"{s.upper()}: max {r[s]['max_diff']:.1e}, {r[s]['n_bad']}/{r[s]['n_positions']} bad"
+                                   for s in ("a", "b")), flush=True)
+                if not r["ok"]:
+                    failed.append(f"{name} {path}/{kind}")
     (out / "fused_audit.json").write_text(json.dumps(report, indent=1))
+    print("FAILED: " + ", ".join(failed) if failed else "ALL PASS", flush=True)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    main(args[0], *(int(a) for a in args[1:3]), *args[3:])
+    n = 1 if len(args) > 1 and args[1].isdigit() else 0
+    sys.exit(main(args[0], *(int(a) for a in args[1:1 + n]), *args[1 + n:]))

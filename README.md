@@ -1,12 +1,30 @@
-# BLaMMoE — Phase 1
+# BLaMMoE
 
-**Target claim (the Micro-Alignment Problem):** can highly idiosyncratic,
-fine-grained MoE experts from *independently-trained* checkpoints be aligned into
-a shared cross-model latent space **without catastrophic interference**?
+*Bridged by Latent Attention Model Mixture of Experts*
 
-Phase 1 scope is deliberately narrow: prove **non-destructive, high-bandwidth
-transmission of a single expert's own output between two disjoint models** (N=2).
-Router training, cross-model task gains, and N>2 are out of scope (Phase 2).
+**Make MoE experts from different models talk to each other.**
+
+Take two mixture-of-experts language models that were trained separately and work fine on their own. Freeze them both. Then train a translator that reads one model's expert activations as it runs and feeds what it reads into the other model, both ways, a token at a time. If it works, each model can draw on the other's experts where its own are weak, and two existing models become a different one without retraining either.
+
+What I'm after:
+
+- Off-the-shelf models stay as they are, and each still works fine alone.
+- The translator allows, and ideally encourages, free expert-to-expert transfer in the middle of the models, not just one model handing the other its last layer.
+- The aim is a different model, not necessarily a better one.
+
+So far it's all toy MoEs: a code-heavy model and a prose-heavy one, with the same tokenizer or with different ones. Every trained translator has to pass a float64 leak audit, so neither model can peek at text it hasn't reached yet. Where it stands:
+
+- Two-way transfer works. Each model takes its weak domain from the other, both at once.
+- Left to itself, the translator uses the latest layer it's offered. With the last layer offered, that turns into a swap of last layers, and each model comes to depend on the other. Without the last layer it gets about half the gain with a small fraction of the dependence. That's the best shape so far.
+- Between models with different tokenizers, only a little gets across. Crossing tokenizers is the main gap.
+
+The next step up is a small real-MoE pilot. [`docs/HANDOFF.md`](docs/HANDOFF.md) has the current state and next steps.
+
+## Where it started
+
+The first idea was the one at the top: let the native experts inside off-the-shelf MoEs talk to each other through a shared latent bus, so two models' experts become one big addressable pool (say 128 from one and 64 from another, 192 in all), with a learned Latent Attention Model doing the bridging. The original idea doc, with the prior art and the risks as I saw them then, is [`docs/idea-and-prior-art.md`](docs/idea-and-prior-art.md).
+
+After review I narrowed it. The Phase 1 spec asked a sharper question, the Micro-Alignment Problem: can fine-grained MoE experts from independently trained checkpoints be aligned into a shared cross-model latent space without catastrophic interference? It scoped Phase 1 to non-destructive transmission of a single expert's own output between two models, with router training, task gains and more than two models left for later. The toy programme showed that much can be done (an expert's output carried across without breaking either model), and then went back to the broader goal above.
 
 - Full experimental spec: [`blammoe-spec-and-bibliography-v4.md`](blammoe-spec-and-bibliography-v4.md)
 - Bibliography verification: [`verification_report.md`](verification_report.md)
@@ -59,9 +77,9 @@ uv venv && uv pip install -e ".[dev]"     # pulls CUDA torch, transformers, data
 ## Status
 
 **Start with [`docs/HANDOFF.md`](docs/HANDOFF.md)**: current state, how to reproduce,
-next steps. All work is on branch `claude/new-session-f94vqn`.
+next steps. Current work is on branch `audit-fixes`.
 
-Built and tested (`pytest` green, 64 tests): config loader, model registry,
+Built and tested (`pytest` green, 119 tests): config loader, model registry,
 expert-capture hook, alignment fitters (WP4), metric battery + Rung-1 gate (WP5),
 char-span pooling (WP2), Tx/Rx gated cross-attention adapters (WP6), device selection,
 bootstrap statistics, a hardware probe, and a toy end-to-end programme:
@@ -70,6 +88,32 @@ bootstrap statistics, a hardware probe, and a toy end-to-end programme:
   [`docs/toy-poc-results.md`](docs/toy-poc-results.md).
 - Two-way lockstep fusion with translator-chosen experts, a tokenizer-leak audit and
   leak-proof results: [`docs/toy-fusion-results.md`](docs/toy-fusion-results.md).
+- **Current numbers:** the seed sweep (3 cross-family + 3 same-design pairs, CIs, causal
+  expert attribution): [`docs/toy-sweep-results.md`](docs/toy-sweep-results.md).
+- Complementary models (code-heavy A, prose-heavy B, translator trained on ordinary text only,
+  same-domain control partners): [`docs/toy-complement-results.md`](docs/toy-complement-results.md).
+- The allow/force dial, part 1 (a growing share of forced recall on the complementary models):
+  [`docs/toy-dial-results.md`](docs/toy-dial-results.md).
+- The dial, part 2 (the partner-win reward, and the force dial with fair answer weighting):
+  [`docs/toy-dial2-results.md`](docs/toy-dial2-results.md).
+- "Different, not better" and why A never gets prose (CPU diagnostics on the trained translators):
+  [`docs/toy-different-results.md`](docs/toy-different-results.md).
+- A with a prose-heavy char partner (same architecture as A): the expert-bus gap is not the tokenizer:
+  [`docs/toy-char-pair-results.md`](docs/toy-char-pair-results.md).
+- Outside review (Codex gpt-6-astra) of the char-pair result, and the attraction / wrong-partner split of "toward":
+  [`docs/review-2026-10-31.md`](docs/review-2026-10-31.md).
+- Controls for the char pair (new translator seed, swapped slots, a partner from another init): the one-way pattern holds:
+  [`docs/toy-char-ctrl-results.md`](docs/toy-char-ctrl-results.md).
+- Which channel carries prose into A: the MoE-sum signal and the residual stream do (2 seeds of 3), the per-expert bus doesn't:
+  [`docs/toy-char-channel-results.md`](docs/toy-char-channel-results.md).
+- Start A's gates open: prose goes into A through the expert bus after all (the one-way pattern was the zero gate start):
+  [`docs/toy-char-gate-results.md`](docs/toy-char-gate-results.md).
+- After the gate start: A reads A''s last layer as a set; without the last link it gets half the prose with a fifth of the dependence; from BPE B it gets only a little:
+  [`docs/toy-char-gate2-results.md`](docs/toy-char-gate2-results.md).
+- Both sides open: two-way transfer at once; on links 0-2 it keeps half the gain with little partner dependence; A-B unchanged:
+  [`docs/toy-char-gate3-results.md`](docs/toy-char-gate3-results.md).
+- Links 0-2 both open holds at a second translator seed and with other-init partners; with links 0-1 only, A gets no prose; link dropout cuts dependence but doesn't spread A's prose off the latest link:
+  [`docs/toy-char-gate4-results.md`](docs/toy-char-gate4-results.md).
 
 The real-model work packages (WP1 loader, WP2 collection, WP3, WP7-WP11) are specified
 in the work plan and intentionally **not** stubbed.

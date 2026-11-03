@@ -26,3 +26,15 @@ def test_paired_diff_detects_real_gap_and_not_a_null_one():
 def test_seed_summary():
     s = seed_summary([0.9, 0.95, 1.0])
     assert abs(s["mean"] - 0.95) < 1e-9 and abs(s["sd"] - 0.05) < 1e-9 and s["n_seeds"] == 3
+
+
+def test_bootstrap_drops_answerless_resamples_instead_of_scoring_them_zero():
+    """[[0,0],[1,1]]: every resample with answers is 100% correct. 0/0 used to count as 0,
+    giving a CI of [0, 1]."""
+    r = bootstrap_ci([[0, 0], [1, 1]])
+    assert r["acc"] == r["lo"] == r["hi"] == 1.0
+    assert 0 < r["n_dropped"] < 2000  # ~1/4 of resamples draw only the empty document
+    d = paired_bootstrap_diff([[0, 0], [1, 1]], [[0, 0], [0, 1]])
+    assert d["diff"] == d["lo"] == d["hi"] == 1.0
+    empty = bootstrap_ci([[0, 0]])
+    assert np.isnan(empty["acc"]) and np.isnan(empty["lo"]) and empty["n_dropped"] == 2000

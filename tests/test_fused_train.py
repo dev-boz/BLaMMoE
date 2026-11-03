@@ -3,12 +3,16 @@ import random
 
 import torch
 
-from blammoe.toy.corpus import recall_sample, split_recall_sample
-from blammoe.toy.fused import FusedPair
+from blammoe.toy.corpus import Sample, recall_sample, split_recall_sample
+from blammoe.toy.batching import make_batch
+from blammoe.toy.fused import BusAblation, FusedPair, answer_mask, expert_output_means, pair_loss
 from blammoe.toy.fused_train import (
-    ensemble_baseline, general_bpc, hide_ablation, mixed_draw, split_eval_set, split_scores, train_fused,
+    causal_chosen, chosen_experts, domain_eval_sets, ensemble_baseline, ensemble_bits, general_bpc, hide_ablation,
+    mixed_draw, recovery_finetune, split_eval_set, split_scores,
+    train_fused,
 )
 from blammoe.toy.moe import ToyMoEConfig, ToyMoELM
+from blammoe.toy.reward import win_weighted_loss
 from blammoe.toy.tokenizers import BPETokenizer, CharTokenizer
 
 L = 100
@@ -42,6 +46,8 @@ def test_train_fused_opens_gates_and_evals_are_well_formed():
     per = r["per_doc"]["m1_needs_partner"]
     assert len(per) == 3 and sum(t for _, t in per) == r["m1_needs_partner"]["n"]
     assert sum(c for c, _ in per) == round(r["m1_needs_partner"]["acc"] * r["m1_needs_partner"]["n"])
+    ex = r["per_doc"]["m1_needs_partner_exact"]
+    assert sum(t for _, t in ex) == r["m1_needs_partner"]["n_answers"]
     docs = [split_recall_sample(random.Random(9), L).view("a")]
     bpc = general_bpc(pair, docs, ta, tb, L)
     assert bpc["m1_bpc"] > 0 and bpc["m2_bpc"] > 0
@@ -60,3 +66,239 @@ def test_ensemble_baseline_and_hide_ablation_shapes():
     hid = hide_ablation(pair, splits, ta, tb, L)
     assert len(hid["hide_m2_expert_from_m1"]) == pair.B.cfg.n_experts
     assert len(hid["hide_m1_expert_from_m2"]) == pair.A.cfg.n_experts
+
+
+def test_hide_ablation_attribution_controls():
+    """M3: blank (content gone, tag kept), tag (ids zeroed/shifted, content kept) and joint
+    hiding, each scored in one direction with the other bus untouched."""
+    pair, ta, tb = pair_and_toks()
+    for lk in pair.links.values():
+        with torch.no_grad():
+            lk.rx_a.gate.fill_(1.0)
+            lk.rx_b.gate.fill_(1.0)
+    splits = split_eval_set(L, n=3, seed=6)
+    sel = split_eval_set(L, n=3, seed=8)
+    means = expert_output_means(pair, make_batch([s.view("a") for s in sel], ta, L),
+                                make_batch([s.view("b") for s in sel], tb, L))
+    hid = hide_ablation(pair, splits, ta, tb, L, blank_values=means,
+                        joint_m1=[frozenset({0, 1})], joint_m2=[frozenset({0, 2}), frozenset(range(6))])
+    n1, n2 = pair.A.cfg.n_experts, pair.B.cfg.n_experts
+    assert len(hid["blank_m2_expert_for_m1"]) == n2 and len(hid["blank_m1_expert_for_m2"]) == n1
+    assert set(hid["tags_m2_for_m1"]) == {"zero", "shift"} == set(hid["tags_m1_for_m2"])
+    assert set(hid["joint_hide_m2_from_m1"]) == {"0+2", "0+1+2+3+4+5"} and set(hid["joint_hide_m1_from_m2"]) == {"0+1"}
+    # every partner expert hidden: model 1 reads only the null slot, so which partner it has
+    # cannot matter (not the same as links off: the null read still adds the attention biases)
+    wrong = split_scores(pair, splits, ta, tb, L, partner_roll=1,
+                         ablate=(BusAblation(), BusAblation(hide=frozenset(range(6)))))
+    assert hid["joint_hide_m2_from_m1"]["0+1+2+3+4+5"] == wrong["m1_needs_partner"]["acc"]
+    # each control is scored in one direction: the m1 numbers match a run with only m2's bus ablated
+    one = split_scores(pair, splits, ta, tb, L, ablate=(BusAblation(), BusAblation(tags="shift")))
+    assert hid["tags_m2_for_m1"]["shift"] == one["m1_needs_partner"]["acc"]
+    for k in ("blank_m2_expert_for_m1", "tags_m1_for_m2", "joint_hide_m1_from_m2"):
+        assert all(0 <= v <= 1 for v in hid[k].values())
+
+
+def test_recovery_finetune_trains_a_copy_under_the_ablation():
+    pair, ta, tb = pair_and_toks()
+    before = {k: v.clone() for k, v in pair.links.state_dict().items()}
+    splits = split_eval_set(L, n=3, seed=5)
+    abl = (BusAblation(hide=frozenset({1})), BusAblation(hide=frozenset({2})))
+    seen = []
+    orig = FusedPair.forward
+
+    def spy(self, *a, **kw):
+        seen.append(kw.get("ablate"))
+        return orig(self, *a, **kw)
+
+    FusedPair.forward = spy
+    try:
+        ft, r = recovery_finetune(pair, abl, ta, tb, mixed_draw(PROSE, CODE, L, 0.5, seed=1), splits, L,
+                                  steps=3, batch_size=2, lr=1e-2, answer_weight=1.0, warmup=2, log=lambda m: None)
+    finally:
+        FusedPair.forward = orig
+    assert seen and all(s == abl for s in seen)  # every train AND eval forward had the expert hidden
+    assert all(torch.equal(v, pair.links.state_dict()[k]) for k, v in before.items())  # original untouched
+    assert any(not torch.equal(v, ft.links.state_dict()[k]) for k, v in before.items())
+    assert set(r) == {"before", "after", "train"} and 0 <= r["after"]["m1_needs_partner"] <= 1
+
+
+def test_chosen_experts_reads_the_selection_set_attention_shares():
+    # B<-A pattern from the audit: expert 0 at links 0/1, expert 5 at the last links
+    shares = {"0": [0.6, 0.1, 0.1, 0.0, 0.0, 0.2], "1": [0.5, 0.0, 0.3, 0.0, 0.0, 0.2],
+              "2": [0.1, 0.0, 0.0, 0.1, 0.0, 0.8], "3": [0.0, 0.0, 0.0, 0.2, 0.1, 0.7]}
+    per_link = {l: {"m2_reads_m1": {"share": s}, "m1_reads_m2": {"share": [1.0] + [0.0] * 5}} for l, s in shares.items()}
+    c = chosen_experts(per_link, "m2_reads_m1")
+    assert c["main"] == 5  # 0.2+0.2+0.8+0.7 beats expert 0's 1.2
+    assert c["per_link"] == {0: [0, 5], 1: [0, 2], 2: [5, 0], 3: [5, 3]}
+    assert c["joint"] == [frozenset({0, 5}), frozenset({0, 2, 3, 5})]
+    one = chosen_experts(per_link, "m1_reads_m2")
+    assert one["main"] == 0 and one["joint"] == [frozenset({0, 1})]  # top-1 everywhere is e0: no 1-set
+
+
+def test_causal_chosen_ranks_partner_experts_by_the_damage_hiding_them_does():
+    pair, ta, tb = pair_and_toks()
+    for lk in pair.links.values():
+        with torch.no_grad():
+            lk.rx_a.gate.fill_(1.0)
+            lk.rx_b.gate.fill_(1.0)
+    sel = split_eval_set(L, n=3, seed=8)
+    ch_m2, ch_m1 = causal_chosen(pair, sel, ta, tb, L)
+    hid = hide_ablation(pair, sel, ta, tb, L)
+    assert ch_m2["acc"] == hid["hide_m2_expert_from_m1"] and ch_m1["acc"] == hid["hide_m1_expert_from_m2"]
+    for ch in (ch_m2, ch_m1):
+        order = sorted(ch["acc"], key=lambda e: (ch["acc"][e], e))
+        assert ch["main"] == order[0] and ch["acc"][ch["main"]] == min(ch["acc"].values())
+        assert ch["joint"] == [frozenset(order[:2]), frozenset(order[:3])]
+
+
+def test_exact_answer_accuracy_needs_every_digit_of_an_answer():
+    """Two 4-digit answers; one digit wrong in the first -> digits 7/8 but answers 1/2."""
+    from blammoe.toy.batching import answer_runs
+    from blammoe.toy.bridge import score_answers
+    from blammoe.toy.fused import subset_accuracy
+
+    assert answer_runs([12, 3, 4, 5, 6, 10, 11, 13]) == [[3, 4, 5, 6], [10, 11, 12, 13]]
+    tok = CharTokenizer()
+    text = "store: ab=1234, cd=5678; ask: ab=1234, cd=5678\n"
+    s0 = text.index("ask: ab=") + len("ask: ab=")
+    s1 = text.index(", cd=", s0) + len(", cd=")
+    chars = tuple(range(s0, s0 + 4)) + tuple(range(s1, s1 + 4))
+    b = make_batch([Sample(text=text, blind=text, answer_chars=chars)], tok, len(text))
+    logits = torch.full((*b.targets.shape, tok.vocab_size), -1e4)
+    logits.scatter_(-1, b.targets.clamp_min(0)[..., None], 0.0)  # predict every target...
+    wrong = b.answer_pos[0][1]
+    logits[0, wrong] = 0.0
+    logits[0, wrong, (b.targets[0, wrong] + 1) % tok.vocab_size] = 1.0  # ...except one digit of answer 1
+    r = subset_accuracy(logits, b, [chars])
+    assert (r["n"], r["acc"], r["n_answers"], r["exact"]) == (8, 7 / 8, 2, 0.5)
+    s = score_answers(logits, b)
+    assert (s["n"], s["acc"], s["n_answers"], s["exact"]) == (8, 7 / 8, 2, 0.5)
+
+
+def test_ordinary_text_only_links_and_per_domain_eval():
+    """Complementary-models pieces: p_split 0 draws only ordinary text (both models see the same
+    window), per-domain eval sets, per-document bits that pool back to bits/char, and the
+    per-domain ensemble."""
+    draw = mixed_draw(PROSE, CODE, L, 0.0, seed=2)
+    items = draw(40)
+    assert all(a is b and a.kind in ("prose", "code") for a, b in items)
+    assert {a.kind for a, _ in items} == {"prose", "code"}
+
+    sets = domain_eval_sets(PROSE, CODE, L, n=3, seed=4)
+    assert [d.kind for d in sets["prose"]] == ["prose"] * 3 and [d.kind for d in sets["code"]] == ["code"] * 3
+    assert [d.text for d in domain_eval_sets(PROSE, CODE, L, n=3, seed=4)["code"]] == [d.text for d in sets["code"]]
+
+    pair, ta, tb = pair_and_toks()
+    docs = sets["prose"] + sets["code"]
+    r = general_bpc(pair, docs, ta, tb, L, per_doc=True)
+    for m in ("m1_bpc", "m2_bpc"):
+        rows = r["per_doc"][m]
+        assert len(rows) == 6 and abs(sum(b for b, _ in rows) / sum(c for _, c in rows) - r[m]) < 1e-6
+    assert set(general_bpc(pair, docs, ta, tb, L)) == {"m1_bpc", "m2_bpc"}  # per_doc off by default
+
+    e = ensemble_bits(pair, docs, ta, tb, L)
+    assert e["shared_positions"] > 0 and set(e["bits"]) == {"m1_solo", "m2_solo", "mixture"}
+    base = ensemble_baseline(pair, docs, split_eval_set(L, n=2, seed=6), ta, tb, L)
+    assert base["general_bits"] == e["bits"] and base["general_shared_positions"] == e["shared_positions"]
+
+
+def test_reward_lam_counts_partner_wins_and_logs_their_share():
+    """The reward dial: win tokens count 1 + lam in pair_loss (on top of the recall-answer term),
+    lam 0 is the plain loss, and train_fused logs the win share. Untrained gates are 0, so the
+    fusion equals solo at step 0: no wins yet, the same loss as lam 0."""
+    ta = CharTokenizer()
+    for s in (mixed_draw(PROSE, CODE, L, 0.0, seed=4)(1)[0][0], split_recall_sample(random.Random(3), L).view("a")):
+        b = make_batch([s], ta, L)
+        logits = torch.randn(*b.targets.shape, ta.vocab_size)
+        wins = b.targets != -100
+        wins[:, ::2] = False
+        assert torch.equal(pair_loss(logits, b, 1.0, wins, 0.0), pair_loss(logits, b, 1.0))
+        extra = pair_loss(logits, b, 1.0, wins, 3.0) - pair_loss(logits, b, 1.0)
+        assert torch.isclose(extra, win_weighted_loss(logits, b.targets, wins, 3.0)
+                             - win_weighted_loss(logits, b.targets, wins, 0.0), atol=1e-6)
+        assert extra > 0
+
+    runs = {}
+    for lam in (0.0, 5.0):
+        pair, ta, tb = pair_and_toks()
+        runs[lam] = train_fused(pair, ta, tb, mixed_draw(PROSE, CODE, L, 0.0, seed=3), L, steps=3, batch_size=2,
+                                lr=1e-2, answer_weight=0.0, log=lambda m: None, log_every=1, reward_lam=lam)
+    assert all("win_rate" not in r for r in runs[0.0])
+    assert all(len(r["win_rate"]) == 2 and all(0 <= w <= 1 for w in r["win_rate"]) for r in runs[5.0])
+    assert runs[5.0][0]["win_rate"] == [0.0, 0.0] and runs[5.0][0]["loss"] == runs[0.0][0]["loss"]
+
+
+def test_answer_in_mean_weighs_each_answer_token_1_plus_w():
+    """Force-dial fix: with answer_in_mean an answer token counts 1 + answer_weight inside the one
+    token mean (so the push scales with how many answers there are), wins add lam on top, and
+    ordinary text (no answers) is the plain CE. The default path is the old loss."""
+    ta = CharTokenizer()
+    s = split_recall_sample(random.Random(3), L).view("a")
+    b = make_batch([s, mixed_draw(PROSE, CODE, L, 0.0, seed=4)(1)[0][0]], ta, L)
+    logits = torch.randn(*b.targets.shape, ta.vocab_size)
+    valid = b.targets != -100
+    ce = torch.nn.functional.cross_entropy(logits.flatten(0, 1), b.targets.flatten(), ignore_index=-100,
+                                           reduction="none").view_as(b.targets)
+    m = answer_mask(b)
+    assert m[0].sum() > 0 and m[1].sum() == 0
+    wins = valid.clone()
+    wins[:, 1::2] = False
+    want = (ce * (1 + 20 * m.float() + 3 * wins.float()))[valid].sum() / valid.sum()
+    assert torch.isclose(pair_loss(logits, b, 20.0, wins, 3.0, answer_in_mean=True), want)
+    plain = ce[valid].mean()
+    b2 = make_batch([mixed_draw(PROSE, CODE, L, 0.0, seed=4)(1)[0][0]], ta, L)
+    l2 = logits[1:]
+    assert torch.isclose(pair_loss(l2, b2, 20.0, answer_in_mean=True), pair_loss(l2, b2))
+    old = plain + 20 * torch.nn.functional.cross_entropy(logits[m], b.targets[m])
+    assert torch.isclose(pair_loss(logits, b, 20.0), old)
+
+
+def test_start_gates_opens_one_side_and_leaves_the_init_alone():
+    """gate_start_a: A's readers start at tanh(gate) = a, B's stay shut, nothing else in the
+    translator's init moves, and no randomness is drawn (so later training draws match too)."""
+    p0, ta, tb = pair_and_toks()
+    p1, _, _ = pair_and_toks()
+    state = torch.random.get_rng_state()
+    p1.start_gates(0.3)
+    assert torch.equal(torch.random.get_rng_state(), state)
+    s0, s1 = p0.links.state_dict(), p1.links.state_dict()
+    for k in s0:
+        if k.endswith("rx_a.gate"):
+            assert torch.allclose(torch.tanh(s1[k]), torch.tensor([0.3]))
+        else:
+            assert torch.equal(s0[k], s1[k]), k
+    p1.start_gates(0.1, 0.2)
+    assert all(torch.allclose(torch.tanh(lk.rx_b.gate), torch.tensor([0.2])) for lk in p1.links.values())
+    hist = train_fused(p1, ta, tb, mixed_draw(PROSE, CODE, L, 0.5, seed=1), L, steps=2, batch_size=2,
+                       lr=1e-2, answer_weight=1.0, log=lambda m: None, log_every=1)
+    assert all(abs(g[0] - 0.1) < 0.05 and abs(g[1] - 0.2) < 0.05 for g in hist[0]["gates"].values())
+
+
+def test_link_drop_switches_links_off_without_touching_the_torch_draws():
+    """link_drop: each step drops each link with that probability from its own seeded RNG (logged),
+    0 is the plain run, the torch RNG ends where a plain run's does, and dropping every link
+    trains nothing."""
+    draw = lambda: mixed_draw(PROSE, CODE, L, 0.5, seed=1)  # noqa: E731
+    kw = dict(steps=6, batch_size=2, lr=1e-2, answer_weight=1.0, log=lambda m: None, log_every=1)
+    runs, states = {}, {}
+    for name, extra in (("plain", {}), ("zero", {"link_drop": 0.0}), ("half", {"link_drop": 0.5, "link_drop_seed": 3}),
+                        ("half_again", {"link_drop": 0.5, "link_drop_seed": 3})):
+        torch.manual_seed(7)
+        pair, ta, tb = pair_and_toks()
+        pair.start_gates(0.3, 0.3)
+        runs[name] = train_fused(pair, ta, tb, draw(), L, **kw, **extra)
+        states[name] = torch.random.get_rng_state()
+    assert [r["loss"] for r in runs["plain"]] == [r["loss"] for r in runs["zero"]]
+    assert all("dropped" not in r for r in runs["plain"])
+    dropped = [r["dropped"] for r in runs["half"]]
+    assert dropped == [r["dropped"] for r in runs["half_again"]]
+    assert any(d for d in dropped) and any(len(d) < 2 for d in dropped)
+    assert all(set(d) <= {0, 1} for d in dropped)
+    assert all(torch.equal(states["plain"], st) for st in states.values())
+
+    pair, ta, tb = pair_and_toks()
+    pair.start_gates(0.3, 0.3)
+    before = {k: v.clone() for k, v in pair.links.state_dict().items()}
+    hist = train_fused(pair, ta, tb, draw(), L, **kw, link_drop=1.0)
+    assert all(r["dropped"] == [0, 1] for r in hist)
+    assert all(torch.equal(before[k], v) for k, v in pair.links.state_dict().items())

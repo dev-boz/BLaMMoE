@@ -29,8 +29,10 @@ only shows up at N≥3 (Phase 2). Don't oversell the hub in Phase 1 write-ups.
 Foreign vectors enter via **tanh-gated cross-attention with the gate initialized
 to zero** (Flamingo/CALM). The target model *learns how much* of the foreign
 vector to read, rather than receiving a raw magnitude addition. At init the model
-is unchanged (gate=0 → identity), so training only ever adds signal it finds
-useful — the anti-catastrophic-interference property.
+is unchanged (gate=0 → identity). That guarantee holds **at init only**: after training
+the gates are open, and in the 2026-10-21 sweep every fused pair is 0.002-0.02 bits/char
+worse than solo on ordinary text (`docs/toy-sweep-results.md`). Unpaired, the frozen models
+are untouched.
 
 ## Pipeline (data flow)
 

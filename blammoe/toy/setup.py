@@ -1,6 +1,12 @@
-"""Build the corpus sampler and both tokenizers for a ToyPOCConfig (WP-T)."""
+"""Build the corpus sampler and both tokenizers for a ToyPOCConfig (WP-T).
+
+Every text source names its file-level split (audit M6): ``train`` for anything fitted
+or trained (BPE, pretraining, bridges, links, linear fits), ``val`` for selection,
+``test`` for reported ordinary-text numbers.
+"""
 from __future__ import annotations
 
+import functools
 import random
 from pathlib import Path
 
@@ -12,17 +18,35 @@ from blammoe.toy.tokenizers import BPETokenizer, CharTokenizer
 REPO = Path(__file__).resolve().parents[2]
 
 
-def sampler(cfg: ToyPOCConfig, seed: int) -> MixedSampler:
-    return MixedSampler(load_prose(REPO / "papers"), load_code(), cfg.seq_chars, cfg.p_recall, seed=seed)
+@functools.cache
+def _texts(split: str, val_share: float, test_share: float) -> tuple[str, str]:
+    return load_prose(REPO / "papers", split, val_share, test_share), load_code(split, val_share, test_share)
+
+
+def texts(cfg: ToyPOCConfig, split: str) -> tuple[str, str]:
+    """(prose, code) of one split."""
+    return _texts(split, cfg.val_share, cfg.test_share)
+
+
+def sampler(cfg: ToyPOCConfig, split: str, seed: int, p_prose: float = 0.5) -> MixedSampler:
+    return MixedSampler(*texts(cfg, split), cfg.seq_chars, cfg.p_recall, seed=seed, p_prose=p_prose)
+
+
+def bpe_name(spec: ToyModelSpec, cfg: ToyPOCConfig) -> str:
+    """The BPE cache file for ``spec``. The name carries the split (a cache from before M6 was
+    fitted on held-out text too) and, unless it is 0.5, the model's prose share: a model's BPE
+    is fitted on that model's own mix."""
+    mix = "" if spec.p_prose == 0.5 else f"_p{spec.p_prose:g}"
+    return f"bpe{spec.bpe_vocab}_train_v{cfg.val_share:g}_t{cfg.test_share:g}{mix}.json"
 
 
 def tokenizer(spec: ToyModelSpec, cfg: ToyPOCConfig):
     if spec.tokenizer == "char":
         return CharTokenizer()
-    path = Path(cfg.out_dir) / f"bpe{spec.bpe_vocab}.json"
+    path = Path(cfg.out_dir) / bpe_name(spec, cfg)
     if path.exists():
         return BPETokenizer.load(path)
-    s = sampler(cfg, seed=12345)
+    s = sampler(cfg, "train", seed=12345, p_prose=spec.p_prose)
     tok = BPETokenizer.train([s.sample().text for _ in range(4000)], spec.bpe_vocab)
     path.parent.mkdir(parents=True, exist_ok=True)
     tok.save(path)

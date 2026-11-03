@@ -23,7 +23,9 @@ import math
 import torch
 import torch.nn.functional as F
 
-from blammoe.toy.fused import FusedPair, NEVER
+from blammoe.toy.batching import make_batch
+from blammoe.toy.corpus import Sample
+from blammoe.toy.fused import NEVER, FusedPair, closed_token_ends, run_pair, token_ends
 
 
 def _pad(seqs: list[list[int]], pad_id: int) -> torch.Tensor:
@@ -97,3 +99,86 @@ def full_text_a_nll(pair: FusedPair, a_batch, b_batch, ends_a, ends_b, **fwd_kw)
 
 def to_bits(nll_nats: torch.Tensor) -> float:
     return float(nll_nats.mean() / math.log(2))
+
+
+# --------------------------------------------------------------------------- per-position gate
+def _fill(rows: list[list[int]], fill: int) -> torch.Tensor:
+    out = torch.full((len(rows), max(len(r) for r in rows)), fill, dtype=torch.long)
+    for i, r in enumerate(rows):
+        out[i, : len(r)] = torch.tensor(r)
+    return out
+
+
+@torch.no_grad()
+def honest_logprobs(
+    pair: FusedPair, side: str, text_a: str, text_b: str, positions: list[int], tok_a, tok_b, L: int,
+    batch: int = 32, **fwd_kw,
+) -> torch.Tensor:
+    """[P, V] log-probs of model ``side`` ("a" | "b") at its input ``positions``, each re-run on
+    only what that position has read. The reader keeps its own full-text tokens 0..t (with
+    their full-text closed ends); the partner is re-tokenized on ``partner_text[:e_t]``, e_t =
+    chars read by position t. Works in both directions and for any pair of tokenizers.
+    Partner tokens ending past ``cover`` (the end of its last full-text INPUT token) are
+    dropped: in the full run its final token is only a target, so a reader that has read past
+    the end of a shorter partner text must not get it as an input here either."""
+    own_tok, own_text, p_tok, p_text = (tok_a, text_a, tok_b, text_b) if side == "a" else (tok_b, text_b, tok_a, text_a)
+    full = make_batch([Sample(text=own_text, blind=own_text)], own_tok, L)
+    own_ends, own_closed = token_ends(full)[0].tolist(), closed_token_ends(full)[0].tolist()
+    cover = make_batch([Sample(text=p_text, blind=p_text)], p_tok, L).offsets[0][-1][1]
+    dev = next(pair.parameters()).device
+    out = []
+    for k in range(0, len(positions), batch):
+        chunk = positions[k : k + batch]
+        o_ids, o_end, o_cl, p_ids, p_end, p_cl = [], [], [], [], [], []
+        for t in chunk:
+            e = own_ends[t]
+            o_ids.append(full.ids[0, : t + 1].tolist())
+            o_end.append(own_ends[: t + 1])
+            o_cl.append(own_closed[: t + 1])
+            ids, off = p_tok.encode(p_text[:e])
+            cl = p_tok.closed_ends(p_text[:e], off)
+            n = sum(x <= cover for _, x in off)
+            p_ids.append(ids[:n])
+            p_end.append([x for _, x in off[:n]])
+            p_cl.append(cl[:n])
+        own = (_fill(o_ids, own_tok.pad_id), _fill(o_end, NEVER), _fill(o_cl, NEVER))
+        par = (_fill(p_ids, p_tok.pad_id), _fill(p_end, NEVER), _fill(p_cl, NEVER))
+        (ia, ea, ca), (ib, eb, cb) = (own, par) if side == "a" else (par, own)
+        if not pair.safe_mask:
+            ca, cb = ea, eb
+        la, lb = pair(ia.to(dev), ib.to(dev), ea.to(dev), eb.to(dev),
+                      write_ends_a=ca.to(dev), write_ends_b=cb.to(dev), **fwd_kw)
+        lo = la if side == "a" else lb
+        out.append(lo[torch.arange(len(chunk), device=dev), torch.tensor(chunk, device=dev)].log_softmax(-1).cpu())
+    return torch.cat(out)
+
+
+@torch.no_grad()
+def causality_gate(
+    pair: FusedPair, docs: list[tuple[str, str]], tok_a, tok_b, L: int, tol: float = 1e-4,
+    batch: int = 32, **fwd_kw,
+) -> dict:
+    """Full-text vs prefix-honest log-probs at EVERY scored position of every (text_a, text_b)
+    doc, both models. ``ok`` is False if any position differs by more than ``tol`` (or is not
+    finite): then some model's prediction depended on chars it had not read."""
+    dev = next(pair.parameters()).device
+    res = {s: {"max_diff": 0.0, "n_positions": 0, "n_bad": 0, "worst": None} for s in ("a", "b")}
+    for d, (text_a, text_b) in enumerate(docs):
+        a = make_batch([Sample(text=text_a, blind=text_a)], tok_a, L, device=dev)
+        b = make_batch([Sample(text=text_b, blind=text_b)], tok_b, L, device=dev)
+        la, lb = run_pair(pair, a, b, **fwd_kw)
+        for side, logits, bt in (("a", la, a), ("b", lb, b)):
+            pos = [t for t in range(bt.ids.shape[1]) if bt.targets[0, t] != -100]
+            full = logits[0, pos].log_softmax(-1).cpu()
+            honest = honest_logprobs(pair, side, text_a, text_b, pos, tok_a, tok_b, L, batch, **fwd_kw)
+            diff = (full - honest).abs().amax(-1)
+            diff = torch.where(diff.isfinite(), diff, torch.full_like(diff, float("inf")))  # NaN fails, not passes
+            r = res[side]
+            r["n_positions"] += len(pos)
+            r["n_bad"] += int((diff > tol).sum())
+            if float(diff.max()) > r["max_diff"]:
+                j = int(diff.argmax())
+                r["max_diff"], r["worst"] = float(diff[j]), {"doc": d, "position": pos[j]}
+    res["tol"] = tol
+    res["ok"] = res["a"]["n_bad"] == 0 and res["b"]["n_bad"] == 0
+    return res

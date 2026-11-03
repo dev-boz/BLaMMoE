@@ -1,5 +1,10 @@
 # Toy fusion results — two frozen MoEs run in lockstep and talk at every depth (WP-T2)
 
+> **2026-10-22: numbers superseded.** Everything below is from single-seed runs fitted before
+> the M6 train/val/test split. The current numbers are in
+> [`toy-sweep-results.md`](toy-sweep-results.md) (3 seeds per pair type, CIs, causal
+> attribution). Kept as history.
+
 Follow-on to [`toy-poc-results.md`](toy-poc-results.md). That doc showed one
 expert's output can be *transmitted* from A into B. This one asks the "slap two
 models together" question:

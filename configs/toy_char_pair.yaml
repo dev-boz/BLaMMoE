@@ -1,0 +1,28 @@
+# A with a prose-heavy CHAR partner (docs/toy-different-results.md, "what's left"): is A's shut expert-bus
+# reader about B's tokenizer (B's tokens are readable only once closed, a char late) or B's thin expert
+# spread (64 small experts), or about A as a reader? No pretraining: pair units join models the
+# complementary run trained (models_from), with its unforced translators (ordinary text only).
+#   e<i> = s_i's A (code-heavy) + d_i's A' (prose-heavy; same architecture, tokenizer and init seed as A)
+#   f<i> = s_i's A + s_{i+1}'s A (code-heavy, other seed): the control partner for A's prose gain
+# Read: A (m1) on prose in e beats f by more than the CIs = the tokenizer / spread was the block.
+# Also A' (m2) on code in e, against B's code gain in toy_complement's s units.
+base: configs/toy_poc.yaml
+out_dir: results/toy_char_pair      # symlink to the Data drive
+models_from: results/toy_complement
+seeds: [[0, 1], [2, 3], [4, 5]]
+variants: [ab_experts_all_rel_safe_text, ab_resid_all_rel_safe_text]
+rung2: false
+hide: false
+controls:                           # must match toy_complement.yaml: the pairs name its d units' models
+  - {name: c, keep: model_a, override: {model_b: {p_prose: 0.1}}}
+  - {name: d, keep: model_b, override: {model_a: {p_prose: 0.9}}}
+pairs:
+  - {name: e, model_a: [s, model_a], model_b: [d, model_a]}
+  - {name: f, model_a: [s, model_a], model_b: [s, model_a, 1]}
+overrides:
+  model_a: {p_prose: 0.1}
+  model_b: {p_prose: 0.9}
+  fused:
+    variants:                       # toy_complement's, unchanged
+      ab_experts_all_rel_safe_text: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.0}
+      ab_resid_all_rel_safe_text:   {pair: ab, links: [0, 1, 2, 3], signal: resid, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.0}

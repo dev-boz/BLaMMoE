@@ -30,6 +30,18 @@ def answer_positions(offsets: list[tuple[int, int]], answer_chars) -> list[int]:
             and offsets[t][0] in want]
 
 
+def answer_runs(answer_chars) -> list[list[int]]:
+    """Group answer chars into answers: maximal runs of consecutive char indices. Asked values
+    are always separated by ", key=", so each run is one stored value (4 digits)."""
+    runs: list[list[int]] = []
+    for c in sorted(answer_chars):
+        if runs and c == runs[-1][-1] + 1:
+            runs[-1].append(c)
+        else:
+            runs.append([c])
+    return runs
+
+
 def make_batch(samples: list[Sample], tokenizer, max_len: int, blind: bool = False, device=None) -> Batch:
     seqs, offs, fulls, closed, answers = [], [], [], [], []
     for s in samples:

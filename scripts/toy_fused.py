@@ -19,16 +19,16 @@ from blammoe.toy import setup
 from blammoe.toy.config import ToyPOCConfig
 from blammoe.toy.fused import FusedPair
 from blammoe.toy.fused_train import (
-    general_bpc, general_eval_set, mixed_draw, split_eval_set, split_scores, train_fused,
+    domain_eval_sets, general_bpc, general_eval_set, mixed_draw, split_eval_set, split_scores, train_fused,
 )
 from blammoe.toy.moe import load
 
 
 def main(cfg_path: str, variant: str, threads: int = 4) -> None:
     torch.set_num_threads(threads)
-    torch.manual_seed(0)
     device = pick_device()
     cfg = ToyPOCConfig.from_yaml(cfg_path)
+    torch.manual_seed(cfg.fused.seed)
     fs, out, L = cfg.fused, Path(cfg.out_dir), cfg.seq_chars
     v = fs.variants[variant]
     tok_a, tok_b = setup.tokenizer(cfg.model_a, cfg), setup.tokenizer(cfg.model_b, cfg)
@@ -41,6 +41,7 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
         m2 = copy.deepcopy(m1)  # self-fusion control: two copies of the same model
     pair = FusedPair(m1, m2, v["links"], fs.d_bus, fs.n_heads, v.get("signal", "moe"), v.get("rel_pos", False),
                      v.get("safe_mask", False)).to(device)
+    pair.start_gates(v.get("gate_start_a", 0.0), v.get("gate_start_b", 0.0))
     t0 = time.time()
     logf = open(out / f"fused_{variant}.log", "w")
 
@@ -50,35 +51,47 @@ def main(cfg_path: str, variant: str, threads: int = 4) -> None:
         logf.write(line + "\n")
         logf.flush()
 
-    base = setup.sampler(cfg, seed=0)
     n_params = sum(p.numel() for p in pair.bridge_parameters())
     log(f"variant {variant} {v}: {n_params:,} bridge params on {device}")
-    history = train_fused(pair, t1, t2, mixed_draw(base.prose, base.code, L, fs.p_split, seed=4242), L,
+    history = train_fused(pair, t1, t2, mixed_draw(*setup.texts(cfg, "train"), L, v.get("p_split", fs.p_split),
+                                                         seed=4242 + fs.seed), L,
                           steps=v.get("steps", fs.steps), batch_size=fs.batch_size, lr=fs.lr,
-                          answer_weight=fs.answer_weight, log=log)
+                          answer_weight=v.get("answer_weight", fs.answer_weight), reward_lam=v.get("reward_lam", 0.0),
+                          answer_in_mean=v.get("answer_in_mean", False), link_drop=v.get("link_drop", 0.0),
+                          link_drop_seed=fs.seed, log=log)
 
     # ---------------- evaluation (held-out seeds)
     splits = split_eval_set(L)
-    gen = general_eval_set(base.prose, base.code, L)
+    gen = general_eval_set(*setup.texts(cfg, "test"), L)
+    domains = domain_eval_sets(*setup.texts(cfg, "test"), L)
     all_links = frozenset(int(k) for k in pair.links)
     split_eval = lambda **kw: split_scores(pair, splits, t1, t2, L, **kw)  # noqa: E731
-    gen_eval = lambda **kw: general_bpc(pair, gen, t1, t2, L, **kw)  # noqa: E731
+    gen_eval = lambda docs=gen, **kw: general_bpc(pair, docs, t1, t2, L, **kw)  # noqa: E731
     res = {"variant": variant, "spec": v, "bridge_params": n_params, "train": history,
-           "split": {"fused": split_eval(), "shuffled_partner": split_eval(partner_roll=1),
-                     "solo": split_eval(disabled=all_links)},
+           "split": {"fused": split_eval(per_doc=True), "shuffled_partner": split_eval(partner_roll=1, per_doc=True),
+                     "solo": split_eval(disabled=all_links, per_doc=True)},  # per_doc: bootstrap CIs (toy_sweep)
            "general": {"fused": gen_eval(), "shuffled_partner": gen_eval(partner_roll=1),
-                       "solo": gen_eval(disabled=all_links)}}
+                       "solo": gen_eval(disabled=all_links)},
+           # per document for bootstrap CIs; a gain on the domain a model saw little of = partner knowledge
+           "domain": {d: {"fused": gen_eval(docs, per_doc=True),
+                          "shuffled_partner": gen_eval(docs, partner_roll=1, per_doc=True),
+                          "solo": gen_eval(docs, disabled=all_links, per_doc=True)} for d, docs in domains.items()}}
     if len(all_links) > 1:
         res["split"]["only_link"] = {l: split_eval(disabled=all_links - {l}) for l in sorted(all_links)}
         res["split"]["without_link"] = {l: split_eval(disabled=frozenset({l})) for l in sorted(all_links)}
+    fmt = lambda r: " ".join(f"{n}={x['acc']:.3f} (exact {x['exact']:.3f})"  # noqa: E731
+                             for n, x in r.items() if n != "per_doc")
     for k, r in res["split"].items():
         if k in ("only_link", "without_link"):
             for l, rr in r.items():
-                log(f"split {k} {l}: " + " ".join(f"{n}={x['acc']:.3f}" for n, x in rr.items()))
+                log(f"split {k} {l}: {fmt(rr)}")
         else:
-            log(f"split {k}: " + " ".join(f"{n}={x['acc']:.3f}" for n, x in r.items()))
+            log(f"split {k}: {fmt(r)}")
     for k, r in res["general"].items():
         log(f"general {k}: " + " ".join(f"{n}={x:.4f}" for n, x in r.items()))
+    for d, rd in res["domain"].items():
+        for k, r in rd.items():
+            log(f"{d} {k}: " + " ".join(f"{n}={x:.4f}" for n, x in r.items() if n != "per_doc"))
     (out / f"fused_{variant}.json").write_text(json.dumps(res, indent=1, default=str))
     torch.save(pair.links.state_dict(), out / f"fused_{variant}.pt")
     log("done")

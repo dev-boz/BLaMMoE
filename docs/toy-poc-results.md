@@ -1,5 +1,10 @@
 # Toy POC results — does one MoE expert's output survive transplant into another MoE?
 
+> **2026-10-22: not re-run.** This one-way POC was fitted before the M6 train/val/test split
+> and is not part of the seed sweep. Treat its numbers as provisional until `toy_poc.py` /
+> `toy_followup.py` are re-run (e.g. on `results/toy_sweep/s0`). The two-way results are in
+> [`toy-sweep-results.md`](toy-sweep-results.md).
+
 **Short answer: yes, at toy scale, two ways.**
 
 - **Zero-shot linear transplant:** the *native* output of a single routed

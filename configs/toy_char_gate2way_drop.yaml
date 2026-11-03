@@ -1,0 +1,29 @@
+# Push the transfer off the latest link (docs/toy-char-gate3-results.md, next ideas)
+# Every working channel so far puts nearly all of the transfer through the latest link it can get.
+# Here both sides start open (tanh 0.3, as toy_char_gate2way / toy_char_gate2way012, translator seed 0)
+# and each training step switches each link off with probability 0.5 (link_drop), so the translator
+# can't lean on one link alone. At eval every link is on. Two variants: all 4 links, and links 0-2.
+# Read: does the transfer spread over depth (link ablation), and does partner dependence drop?
+#   e<i> = s_i's A + d_i's A';  f<i> = s_i's A + s_{i+1}'s A (A's control);
+#   h<i> = d_i's A' + d_{i+1}'s A' (A''s control).
+base: configs/toy_poc.yaml
+out_dir: results/toy_char_gate2way_drop   # symlink to the Data drive
+models_from: results/toy_complement
+seeds: [[0, 1], [2, 3], [4, 5]]
+variants: [ab_experts_all_rel_safe_text_ga3b3_ld5, ab_experts_012_rel_safe_text_ga3b3_ld5]
+rung2: false
+hide: false
+controls:                           # must match toy_complement.yaml: the pairs name its d units' models
+  - {name: c, keep: model_a, override: {model_b: {p_prose: 0.1}}}
+  - {name: d, keep: model_b, override: {model_a: {p_prose: 0.9}}}
+pairs:
+  - {name: e, model_a: [s, model_a], model_b: [d, model_a]}
+  - {name: f, model_a: [s, model_a], model_b: [s, model_a, 1]}
+  - {name: h, model_a: [d, model_a], model_b: [d, model_a, 1]}
+overrides:
+  model_a: {p_prose: 0.1}
+  model_b: {p_prose: 0.9}
+  fused:
+    variants:
+      ab_experts_all_rel_safe_text_ga3b3_ld5: {pair: ab, links: [0, 1, 2, 3], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.0, gate_start_a: 0.3, gate_start_b: 0.3, link_drop: 0.5}
+      ab_experts_012_rel_safe_text_ga3b3_ld5: {pair: ab, links: [0, 1, 2], signal: experts, rel_pos: true, safe_mask: true, steps: 3000, p_split: 0.0, gate_start_a: 0.3, gate_start_b: 0.3, link_drop: 0.5}
