@@ -1,12 +1,26 @@
-# BLaMMoE — Phase 1
+# BLaMMoE
 
-**Target claim (the Micro-Alignment Problem):** can highly idiosyncratic,
-fine-grained MoE experts from *independently-trained* checkpoints be aligned into
-a shared cross-model latent space **without catastrophic interference**?
+**Make MoE experts from different models talk to each other.**
 
-Phase 1 scope is deliberately narrow: prove **non-destructive, high-bandwidth
-transmission of a single expert's own output between two disjoint models** (N=2).
-Router training, cross-model task gains, and N>2 are out of scope (Phase 2).
+Take two mixture-of-experts language models that were trained separately and work fine on their own. Freeze them both. Then train a translator that reads one model's expert activations as it runs and feeds what it reads into the other model, both ways, a token at a time. If it works, each model can draw on the other's experts where its own are weak, and two existing models become a different one without retraining either.
+
+What I'm after:
+
+- Off-the-shelf models stay as they are, and each still works fine alone.
+- The translator allows, and ideally encourages, free expert-to-expert transfer in the middle of the models, not just one model handing the other its last layer.
+- The aim is a different model, not necessarily a better one.
+
+So far it's all toy MoEs: a code-heavy model and a prose-heavy one, with the same tokenizer or with different ones. Every trained translator has to pass a float64 leak audit, so neither model can peek at text it hasn't reached yet. Where it stands:
+
+- Two-way transfer works. Each model takes its weak domain from the other, both at once.
+- Left to itself, the translator uses the latest layer it's offered. With the last layer offered, that turns into a swap of last layers, and each model comes to depend on the other. Without the last layer it gets about half the gain with a small fraction of the dependence. That's the best shape so far.
+- Between models with different tokenizers, only a little gets across. Crossing tokenizers is the main gap.
+
+The next step up is a small real-MoE pilot. [`docs/HANDOFF.md`](docs/HANDOFF.md) has the current state and next steps.
+
+## Where it started
+
+The original Phase 1 spec asked a narrower question, the Micro-Alignment Problem: can fine-grained MoE experts from independently trained checkpoints be aligned into a shared cross-model latent space without catastrophic interference? It scoped Phase 1 to non-destructive transmission of a single expert's own output between two models, with router training, task gains and more than two models left for later. The toy programme showed that much can be done (an expert's output carried across without breaking either model), and then moved on to the broader goal above.
 
 - Full experimental spec: [`blammoe-spec-and-bibliography-v4.md`](blammoe-spec-and-bibliography-v4.md)
 - Bibliography verification: [`verification_report.md`](verification_report.md)
@@ -59,9 +73,9 @@ uv venv && uv pip install -e ".[dev]"     # pulls CUDA torch, transformers, data
 ## Status
 
 **Start with [`docs/HANDOFF.md`](docs/HANDOFF.md)**: current state, how to reproduce,
-next steps. All work is on branch `claude/new-session-f94vqn`.
+next steps. Current work is on branch `audit-fixes`.
 
-Built and tested (`pytest` green, 64 tests): config loader, model registry,
+Built and tested (`pytest` green, 119 tests): config loader, model registry,
 expert-capture hook, alignment fitters (WP4), metric battery + Rung-1 gate (WP5),
 char-span pooling (WP2), Tx/Rx gated cross-attention adapters (WP6), device selection,
 bootstrap statistics, a hardware probe, and a toy end-to-end programme:
