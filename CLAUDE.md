@@ -63,6 +63,6 @@ PYTHONPATH=. .venv-dev/bin/python -m pytest tests/test_metrics.py -q
 - Current state, how to reproduce, and next steps: `docs/HANDOFF.md` (start here)
 
 - Experimental design & rationale: `blammoe-spec-and-bibliography-v4.md`
-- Source papers (already downloaded): `papers/` — see `docs/papers-index.md`
+- Source papers (local only, gitignored; re-fetch with `scripts/download_papers.py`): `papers/` — see `docs/papers-index.md`
   for which paper backs which work package. Read the paper before implementing
   the method it describes.

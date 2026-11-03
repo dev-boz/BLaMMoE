@@ -48,7 +48,7 @@ blammoe/            importable package (only tested modules exist — no empty s
   toy/              toy MoE pair + transmission POC (WP-T)     [built]
 configs/            one YAML per rung
 docs/               work plan + design docs (agent hand-off)
-papers/             33 source papers as markdown (already fetched)
+papers/             source papers as markdown, local only (see below)
 scripts/            one-off utilities (e.g. download_papers.py)
 tests/              pytest — every built module has a test here
 data/  results/     git-ignored; activations & experiment outputs
@@ -117,3 +117,11 @@ bootstrap statistics, a hardware probe, and a toy end-to-end programme:
 
 The real-model work packages (WP1 loader, WP2 collection, WP3, WP7-WP11) are specified
 in the work plan and intentionally **not** stubbed.
+
+## Source papers
+
+`papers/` holds markdown copies of the 30 arXiv papers and 3 GitHub repos behind the spec (list in [`docs/papers-index.md`](docs/papers-index.md)). It isn't in the repo, because most of them don't allow redistribution. `scripts/download_papers.py` fetches them again. The toy models use those papers as their prose corpus, so a re-fetch that converts a PDF slightly differently gives a slightly different corpus, and toy numbers won't match the write-ups exactly.
+
+## Licence
+
+MIT, see [`LICENSE`](LICENSE). This covers the code and docs in this repo, not the third-party papers.

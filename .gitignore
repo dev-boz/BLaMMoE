@@ -15,6 +15,9 @@ data/*
 results/*
 !results/.gitkeep
 
+# Source papers: local copies only, not redistributed (re-fetch with scripts/download_papers.py)
+papers/
+
 # Model weights / caches
 *.safetensors
 *.bin

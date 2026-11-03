@@ -1,6 +1,6 @@
 # Papers index — which source backs which work package
 
-All 33 sources are in `papers/` as markdown (already fetched). Read the paper(s)
+All 33 sources were fetched into `papers/` as markdown. That folder is local only: most of the papers' licences don't allow redistribution, so it isn't in the repo. `scripts/download_papers.py` re-fetches them. Read the paper(s)
 for a WP before implementing its method. Status tags are from the spec's
 bibliography as refined by `../verification_report.md`. `[VERIFIED]` unless noted.
 

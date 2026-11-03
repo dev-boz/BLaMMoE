@@ -1,8 +1,9 @@
 [project]
 name = "blammoe"
 version = "0.0.1"
-description = "BLaMMoE Phase 1 — expert-level cross-model latent alignment experiments"
+description = "Make MoE experts from different models talk to each other: a learned translator reads one frozen MoE's expert activations and feeds them to another"
 readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
     "torch>=2.4",
