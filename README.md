@@ -1,5 +1,7 @@
 # BLaMMoE
 
+*Bridged by Latent Attention Model Mixture of Experts*
+
 **Make MoE experts from different models talk to each other.**
 
 Take two mixture-of-experts language models that were trained separately and work fine on their own. Freeze them both. Then train a translator that reads one model's expert activations as it runs and feeds what it reads into the other model, both ways, a token at a time. If it works, each model can draw on the other's experts where its own are weak, and two existing models become a different one without retraining either.
@@ -20,7 +22,9 @@ The next step up is a small real-MoE pilot. [`docs/HANDOFF.md`](docs/HANDOFF.md)
 
 ## Where it started
 
-The original Phase 1 spec asked a narrower question, the Micro-Alignment Problem: can fine-grained MoE experts from independently trained checkpoints be aligned into a shared cross-model latent space without catastrophic interference? It scoped Phase 1 to non-destructive transmission of a single expert's own output between two models, with router training, task gains and more than two models left for later. The toy programme showed that much can be done (an expert's output carried across without breaking either model), and then moved on to the broader goal above.
+The first idea was the one at the top: let the native experts inside off-the-shelf MoEs talk to each other through a shared latent bus, so two models' experts become one big addressable pool (say 128 from one and 64 from another, 192 in all), with a learned Latent Attention Model doing the bridging. The original idea doc, with the prior art and the risks as I saw them then, is [`docs/idea-and-prior-art.md`](docs/idea-and-prior-art.md).
+
+After review I narrowed it. The Phase 1 spec asked a sharper question, the Micro-Alignment Problem: can fine-grained MoE experts from independently trained checkpoints be aligned into a shared cross-model latent space without catastrophic interference? It scoped Phase 1 to non-destructive transmission of a single expert's own output between two models, with router training, task gains and more than two models left for later. The toy programme showed that much can be done (an expert's output carried across without breaking either model), and then went back to the broader goal above.
 
 - Full experimental spec: [`blammoe-spec-and-bibliography-v4.md`](blammoe-spec-and-bibliography-v4.md)
 - Bibliography verification: [`verification_report.md`](verification_report.md)
