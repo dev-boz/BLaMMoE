@@ -1,9 +1,9 @@
-# Handoff — BLaMMoE, state as of 2026-11-01
+# Handoff — BLaMMoE, state as of 2026-11-04
 
 For whoever picks this up next, human or agent. Read `CLAUDE.md` first (working agreement).
-`main` has the toy programme (PR #1 merged). The audit fixes, the seed sweep and its write-up
-and everything since (complementary models, the allow/force dials, the char pair, the outside review) are on local branch
-**`audit-fixes`** (pushed to origin/audit-fixes 2026-11-03 at the owner's request; not merged into main). 119 tests pass:
+The repo is **public** (github.com/dev-boz/BLaMMoE, MIT) since 2026-11-03. `main` and `audit-fixes`
+point at the same commit; everything is pushed. Work on a branch and keep `main` the public face.
+Nothing private goes in commits (results/, data/, weights and papers/ are gitignored). 119 tests pass:
 `CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python -m pytest -q` (the venv is `.venv`).
 
 ## Project goal (from the owner)
@@ -56,12 +56,59 @@ and several agreeing counts for more than one strong reviewer.
   --dangerously-bypass-approvals-and-sandbox -C <dir> -o <report> - < prompt.md`. agy can't take
   prompts headless, so run it in tmux.
 
-## START HERE: after the dials (next session)
+## START HERE (next session, from 2026-11-04)
 
 **Prompt for the next session:**
-> Resume BLaMMoE: read docs/HANDOFF.md "START HERE" and docs/toy-dial2-results.md. Both dials are
-> done. Help me pick between (a) fair forcing at 0.01-0.02, (b) a smooth reward, (c) the A-side
-> prose gap. Ask before any GPU job; mount the Data drive first.
+> Resume BLaMMoE: read docs/HANDOFF.md "START HERE" and docs/toy-char-gate4-results.md. The toy
+> both-open runs are done (links 0-2 = best shape, dropout doesn't spread A's prose, A-B crossing is
+> the main gap). Help me pick the next step from the options there. Ask before any GPU job; mount
+> the Data drive first.
+
+**Where it is now, in one paragraph.** Two frozen toy MoEs, a translator on the per-expert bus,
+both sides' readers starting part-open (`gate_start_a/b` 0.3): each model takes its weak domain from
+the other at once (A prose from A', A' code from A), beyond same-domain controls, in every seed, at
+two translator seeds and with other-init partners, all leak-audited. With the last link offered it's
+a mutual last-layer swap (wrong partner +0.7..+1.3 bits/char); on links 0-2 it's half the gain with
+little dependence (the setting to build on). The translator always uses the latest link it's given,
+the gain shrinks with that link's depth (A: link 3 ~0.17, link 2 ~0.08, link 1 0), and link dropout
+doesn't spread A's prose to earlier links. A reads a partner layer as a set, not prose specialists.
+Across tokenizers (char A, BPE B) only ~0.017 bits/char of prose gets across. Reading: at toy size
+the middle layers don't hold much the other model can use, and crossing tokenizers is the main gap.
+
+**Next options (owner to pick; none agreed yet):**
+- (1) **Small-level real-MoE pilot** (the size ladder's next rung; the toy depth result argues for
+  it). Pick an off-the-shelf small MoE pair that fits the CMPs, verify the registry against the real
+  checkpoints (CLAUDE.md rule 3), then the WP1 loader and WP2 collection the workplan specifies.
+  Biggest job; start with a plan and model choice, no GPU needed for that.
+- (2) **Tokenizer crossing (A-B)** on the toys: why ~0.017 from BPE B vs ~0.08-0.17 from char A'.
+  Ideas: a BPE A' (same arch as B, prose-heavy) to split tokenizer from architecture; char-span
+  pooling of B's expert outputs before A reads them (blammoe/data/pooling.py exists).
+- (3) Cheap toy follow-ups: a second link-dropout seed (drop RNG = translator seed, so every unit
+  saw one pattern); the 50/50 char reader (models in results/toy_sweep); a second untouched prose
+  test set; renormalise the char projection. Fair forcing / smooth reward (old (a)/(b)) are parked.
+- (4) An AI gauntlet review of gate3/gate4 before moving up (owner's method; ask before running it).
+
+**Outside context (2026-11-04).** "Sparks of Weight-Space Programming" (MIT CSAIL, 2026-11-02) is
+getting a lot of attention; it lists cross-architecture merging as future work. The README's
+Related work section positions BLaMMoE against it. The owner may share BLaMMoE in those threads, so
+keep the README accurate and modest (toy scale, A-B weak).
+
+**Practical notes for night runs (11-01..11-03):**
+- Guard: `~/cmp-tests/sweep-guard.sh <results dir> <cfg> <tmux42> <tmux43>` (generic; one per run).
+  It reads nvidia-smi indices 1,2 only. The 3090 (index 0, bus 08:00) drives the desktop and is NOT
+  guarded: leave it alone unless the guard is extended.
+- Queue scripts lived in the session scratchpad and were lost on reboot. Pattern: launch both cards'
+  sweeps in tmux (tee to `sweep_42/43.log`, then `echo SWEEP-EXIT ${PIPESTATUS[0]}`), start the guard,
+  wait for both SWEEP-EXIT 0 (abort on GUARD-KILL), then CPU post: `toy_sweep.py <cfg> 4 none`,
+  `toy_partner_shift.py results/<cfg> 8`, `UNITS=... link_ablation.py results/<cfg> <variants...>`.
+  Refuse to launch near dawn (owner's night OKs are per night).
+- Tabulate from `partner_shift.json`: per unit `m1_prose` / `m2_code` `bits_fused_minus_solo`,
+  `attraction` (lo > 0), and wrong minus solo from `bits`. Final gates are the `'step': 2999` lines in
+  the sweep logs, printed `[rx_a, rx_b]` per link.
+- The toy prose corpus is `papers/` (local only now). A fresh clone needs `scripts/download_papers.py`,
+  and a re-fetch may convert differently, so numbers would shift slightly.
+
+### History (chronological)
 
 **Where the programme is (2026-10-30), in the order it happened:**
 1. Toy sweep (`docs/toy-sweep-results.md`): a translator between two frozen toy MoEs moves
@@ -151,7 +198,7 @@ hold little prose A can use -> argues for the small-level pilot. Nothing running
 every working channel prefers the latest link, and A gets only a little prose from BPE B (-0.017 beyond
 control) against -0.16 from char A'. Crossing tokenizers is now the main gap.
 
-**Next options (owner to pick; none agreed yet):**
+**Older next options (10-30; superseded by the list in START HERE):**
 - (a) Fair forcing at p_split 0.01-0.02: does free transfer return towards unforced while recall
   holds? Cheapest: a new config like `configs/toy_dial2.yaml` with only `*_tok` variants, new
   out_dir (a changed config in an existing out_dir is refused), ~15 min GPU per variant per unit.
@@ -162,7 +209,7 @@ control) against -0.16 from char A'. Crossing tokenizers is now the main gap.
   of B's prose advantage is experts vs attention), and a char-level prose-heavy partner for A to
   rule the tokenizer in or out (needs a new control unit kind in blammoe/toy/sweep.py).
 
-**How runs work now (all from 10-28..10-30):**
+**How runs worked (10-28..10-30; see the practical notes in START HERE for the newer guard):**
 - Sweeps: `scripts/toy_sweep.py <cfg> 4 <units...>`. `models_from:` copies the complement models
   (+ BPE) instead of pretraining, so dials compare like for like. Units: s = real pair, c = A with a
   code-heavy B (control for A's prose gain), d = B with a prose-heavy A (control for B's code gain).
@@ -271,10 +318,7 @@ call stop). Run long jobs in tmux. The `results/` symlinks point at `/media/boz/
 it first (`udisksctl mount -b /dev/disk/by-label/Data`). The root disk has ~4.7 GB free. Timings on
 43:00: one pretrain 4-6 min, one fusion ~8 min, an audit of 2 variants ~7 min, hide ~8 min.
 
-**Prompt for the next session (same as the one at the top of START HERE):**
-> Resume BLaMMoE: read docs/HANDOFF.md "START HERE" and docs/toy-dial2-results.md. Both dials are
-> done. Help me pick between (a) fair forcing at 0.01-0.02, (b) a smooth reward, (c) the A-side
-> prose gap. Ask before any GPU job; mount the Data drive first.
+**The current next-session prompt is at the top of START HERE.**
 
 ## Audit fixes (background)
 
