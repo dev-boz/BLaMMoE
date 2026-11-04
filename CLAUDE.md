@@ -53,9 +53,9 @@ catastrophic interference. Read `docs/workplan.md` for the task list and
 
 ```bash
 # tests (CPU env)
-PYTHONPATH=. .venv-dev/bin/python -m pytest -q
+CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python -m pytest -q
 # a single work package's tests
-PYTHONPATH=. .venv-dev/bin/python -m pytest tests/test_metrics.py -q
+CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python -m pytest tests/test_metrics.py -q
 ```
 
 ## Where the truth lives

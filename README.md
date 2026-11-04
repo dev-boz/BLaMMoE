@@ -34,6 +34,25 @@ After review I narrowed it. The Phase 1 spec asked a sharper question, the Micro
 - Concrete model choices: [`docs/model-selection.md`](docs/model-selection.md)
 - Which paper backs which task: [`docs/papers-index.md`](docs/papers-index.md)
 
+## Related work
+
+The closest recent work is [Sparks of Weight-Space Programming](https://rikiyat.github.io/blog/weight-space-programming/) (Takehi, Teoh, Zhang and Khattab, MIT CSAIL, 2 November 2026). In it a frontier LLM reads a network's raw weights as text and writes new ones. It names what a network was trained on, repairs a broken policy, and edits 0.016% of Qwen3.5-0.8B to lift MATH-500 from 8% to 48%. One of their future directions is the problem BLaMMoE goes after:
+
+> True architectural and model merging: Today, merging models relies on averaging weights, which only works for models with identical architectures. An LLM that understands the weight space could instead graft a circuit, such as a reasoning module, from one model into a completely different one, without retraining.
+
+BLaMMoE comes at that from the other side:
+
+| | Weight-space programming | BLaMMoE |
+|---|---|---|
+| What gets read | Weights, as text | Expert activations, live, a token at a time |
+| Who reads | A frontier LLM, prompted | A small translator, trained |
+| The models | One, edited | Two, frozen, run together |
+| How a skill moves | Graft it in (future work) | Each model draws on the other's experts as they run |
+
+They also found that "editing weights could remove an obstacle that hid an ability, but it could not add an ability the model lacked". That's the gap BLaMMoE aims at. In the toy runs a code-heavy model gets prose it doesn't have from a prose-heavy partner, and neither model changes. Across different architectures and tokenizers it's still weak (see "Where it stands" above), so that's the part to watch. I think the two approaches could fit together: a model that reads weights could choose which experts to connect, and a working bridge could show which circuits are worth grafting.
+
+Earlier prior art (Mixture of Thoughts, Symphony-MoE, GraphMoE, vec2vec and others) is in [`docs/idea-and-prior-art.md`](docs/idea-and-prior-art.md).
+
 ## Repo layout
 
 ```
@@ -56,28 +75,25 @@ data/  results/     git-ignored; activations & experiment outputs
 
 ## Quickstart
 
-This machine has **no GPU**; real model runs happen on the 128 GB / 1080 Ti box
-or rented inference. The code is device-agnostic. Two install profiles:
+The code is device-agnostic: everything runs on CPU, and on CUDA when there is a GPU. The toy runs in the write-ups each take minutes per translator on one data-centre-class GPU. The float64 leak audits run on CPU.
 
 ```bash
-# CPU-only (authoring, linear-algebra work packages, running tests)
-uv venv --python 3.14 .venv-dev
-uv pip install --python .venv-dev --index-url https://download.pytorch.org/whl/cpu torch
-uv pip install --python .venv-dev pytest pyyaml numpy
-PYTHONPATH=. .venv-dev/bin/python -m pytest -q
+# CPU-only (tests, the CPU diagnostics, the audits)
+uv venv --python 3.14 .venv
+uv pip install --python .venv --index-url https://download.pytorch.org/whl/cpu torch
+uv pip install --python .venv pytest pyyaml numpy
+CUDA_VISIBLE_DEVICES="" PYTHONPATH=. .venv/bin/python -m pytest -q
 
-# Full stack (a box that will actually load OLMoE / Qwen-MoE)
-uv venv && uv pip install -e ".[dev]"     # pulls CUDA torch, transformers, datasets
+# Full stack (CUDA torch, transformers, datasets)
+uv venv && uv pip install -e ".[dev]"
 ```
 
-> On the 1080 Ti (Pascal / sm_61): current `torch` default wheels target new CUDA
-> and may drop Pascal. If CUDA init fails, install a CUDA 12.x build
-> (`--index-url https://download.pytorch.org/whl/cu121`) or run that model on CPU.
+Each results doc ends with a Reproduce section with the exact commands. The toy runs need the source papers in `papers/` (see below).
 
 ## Status
 
 **Start with [`docs/HANDOFF.md`](docs/HANDOFF.md)**: current state, how to reproduce,
-next steps. Current work is on branch `audit-fixes`.
+next steps.
 
 Built and tested (`pytest` green, 119 tests): config loader, model registry,
 expert-capture hook, alignment fitters (WP4), metric battery + Rung-1 gate (WP5),
